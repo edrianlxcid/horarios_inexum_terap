@@ -1,0 +1,11 @@
+# Variables de entorno / credenciales (NUNCA subir)
+.env
+.env.*
+!.env.example
+
+# IDEs y sistema
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
