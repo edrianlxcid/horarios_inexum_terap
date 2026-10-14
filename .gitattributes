@@ -1,0 +1,3 @@
+# Las migraciones se comparan por checksum: siempre con finales de línea LF.
+*.sql text eol=lf
+*.bat text eol=crlf

@@ -34,7 +34,8 @@ class Migrador {
     final nuevas = <String>[];
     for (final archivo in archivos) {
       final version = _nombre(archivo).replaceAll('.sql', '');
-      final sql = await archivo.readAsString();
+      // Los finales de línea de Windows (CRLF) no cuentan como cambio.
+      final sql = (await archivo.readAsString()).replaceAll('\r\n', '\n');
       final checksum = await _checksum(sql);
 
       final previo = aplicadas[version];
