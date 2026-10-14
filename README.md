@@ -1,7 +1,9 @@
 # iSmart Salud – Sistema de horarios
 
 Aplicación multiplataforma para la gestión de agenda, pacientes y terapias de iSmart Salud
-(áreas Neuro/Tomatis e Inglés/Estimulación, varias sedes).
+(áreas **Neuro estimulación** y **Estimulación temprana**, varias sedes).
+
+Fuera de alcance por ahora: inglés y e-commerce.
 
 ## Arquitectura
 

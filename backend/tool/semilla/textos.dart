@@ -57,7 +57,7 @@ const notasClinicas = [
   'Trabajo de funciones ejecutivas: planificación y memoria de trabajo con juego de secuencias. Requiere apoyo verbal.',
   'Motricidad fina: pinza trípode y trazos. Mantiene postura con apoyo. Aumenta tiempo de permanencia en mesa.',
   'Regulación emocional: identificación de emociones con pictogramas. Episodio breve de frustración, se autorregula con apoyo.',
-  'Vocabulario en inglés: colores y animales. Responde a consignas simples. Participa en canción grupal.',
+  'Estimulación multisensorial: texturas y sonidos. Sostiene la atención y responde a consignas simples.',
   'Estimulación temprana: gateo dirigido y seguimiento visual. Buena respuesta a estímulos sonoros.',
 ];
 
@@ -68,7 +68,7 @@ const objetivosTerapeuticos = [
   'Lograr pinza trípode funcional para la escritura.',
   'Seguir instrucciones de dos pasos sin apoyo visual.',
   'Identificar y nombrar cuatro emociones básicas.',
-  'Ampliar el vocabulario expresivo en inglés a 50 palabras.',
+  'Lograr la sedestación sin apoyo y el gateo coordinado.',
   'Mejorar el equilibrio dinámico y la coordinación bilateral.',
   'Tolerar texturas nuevas en la alimentación.',
   'Respetar turnos en juegos de grupo.',
@@ -79,7 +79,7 @@ const tareasCasa = [
   ('Juego de soplo', 'Soplar burbujas o una vela 5 minutos al día.'),
   ('Recortar figuras', 'Recortar 3 figuras sencillas siguiendo la línea.'),
   ('Rutina visual', 'Usar la tarjeta de rutina de la mañana durante la semana.'),
-  ('Canción en inglés', 'Cantar juntos la canción de los colores vista en clase.'),
+  ('Masaje y canción', 'Masaje suave con la canción de la sesión antes de dormir.'),
   ('Circuito en casa', 'Armar un circuito con cojines y gatear o saltar 10 minutos.'),
   ('Pictogramas', 'Nombrar la emoción del día usando los pictogramas.'),
 ];

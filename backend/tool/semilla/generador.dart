@@ -64,7 +64,7 @@ class GeneradorSemilla {
   final _correos = <String>{};
   var _historia = 0;
   var _contratoNeuro = 5100;
-  var _contratoIngles = 3200;
+  var _contratoEstimulacion = 3200;
   var _grupo = 60;
 
   // ---------------------------------------------------------------------------
@@ -137,13 +137,13 @@ class GeneradorSemilla {
     ], {'id': 'uuid', 'numero_ruc': 'text', 'canton_id': 'int', 'descripcion': 'text'});
 
     final sedes = [
-      ('VILLAFLORA', 'Villaflora', 170150, 'Av. Maldonado S10-45 y Gatazo', true),
-      ('NORTE', 'Quito Norte', 170157, 'Av. De la Prensa N52-110', false),
-      ('TUMBACO', 'Tumbaco', 170184, 'Av. Interoceánica km 14', false),
+      ('VILLAFLORA', 'Villaflora', 170150, 'Av. Maldonado S10-45 y Gatazo'),
+      ('NORTE', 'Quito Norte', 170157, 'Av. De la Prensa N52-110'),
+      ('TUMBACO', 'Tumbaco', 170184, 'Av. Interoceánica km 14'),
     ];
     final filasSedes = <Map<String, Object?>>[];
     final filasSalas = <Map<String, Object?>>[];
-    for (final (codigo, nombre, parroquia, direccion, piscina) in sedes) {
+    for (final (codigo, nombre, parroquia, direccion) in sedes) {
       final sede = _Sede(_id(), codigo);
       _sedes.add(sede);
       filasSedes.add({
@@ -152,7 +152,7 @@ class GeneradorSemilla {
       });
       final salas = [
         ('Consultorio 1', 1), ('Consultorio 2', 1), ('Consultorio 3', 1), ('Consultorio 4', 1),
-        ('Sala grupal', 8), ('Aula virtual', 40), if (piscina) ('Piscina', 6),
+        ('Sala grupal', 6), ('Sala de estimulación', 6),
       ];
       for (final (nombreSala, capacidad) in salas) {
         final id = _id();
@@ -188,10 +188,10 @@ class GeneradorSemilla {
 
   Future<void> _catalogo(_Lotes db) async {
     _areas['NEURO'] = _id();
-    _areas['INGLES_ESTIMULACION'] = _id();
+    _areas['ESTIMULACION_TEMPRANA'] = _id();
     await db.insertar('catalogo.areas', [
-      {'id': _areas['NEURO'], 'codigo': 'NEURO', 'nombre': 'Neuro / Tomatis'},
-      {'id': _areas['INGLES_ESTIMULACION'], 'codigo': 'INGLES_ESTIMULACION', 'nombre': 'Inglés / Estimulación'},
+      {'id': _areas['NEURO'], 'codigo': 'NEURO', 'nombre': 'Neuro estimulación'},
+      {'id': _areas['ESTIMULACION_TEMPRANA'], 'codigo': 'ESTIMULACION_TEMPRANA', 'nombre': 'Estimulación temprana'},
     ], {'id': 'uuid', 'codigo': 'text', 'nombre': 'text'});
 
     const subs = {
@@ -200,9 +200,7 @@ class GeneradorSemilla {
       'TERAPIA_LENGUAJE': ('NEURO', 'Terapia de lenguaje'),
       'TERAPIA_OCUPACIONAL': ('NEURO', 'Terapia ocupacional'),
       'PSICOLOGIA': ('NEURO', 'Psicología infantil'),
-      'ESTIMULACION_TEMPRANA': ('INGLES_ESTIMULACION', 'Estimulación temprana'),
-      'ESTIMULACION_ACUATICA': ('INGLES_ESTIMULACION', 'Estimulación acuática'),
-      'INGLES': ('INGLES_ESTIMULACION', 'Inglés'),
+      'ESTIMULACION_TEMPRANA': ('ESTIMULACION_TEMPRANA', 'Estimulación temprana'),
     };
     final filas = <Map<String, Object?>>[];
     subs.forEach((codigo, v) {
@@ -242,14 +240,10 @@ class GeneradorSemilla {
           'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 900, const []),
       _ProgDef('PSICOLOGIA_INFANTIL', 'Psicología infantil', 'NEURO', 'SEMANAL', 'PSICOLOGIA', 10, 3, 1,
           'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 350, const []),
-      _ProgDef('ESTIMULACION_TEMPRANA', 'Estimulación temprana grupal', 'INGLES_ESTIMULACION', 'SEMANAL', 'ESTIMULACION_TEMPRANA', 24, 3, 2,
+      _ProgDef('ESTIMULACION_TEMPRANA', 'Estimulación temprana grupal', 'ESTIMULACION_TEMPRANA', 'SEMANAL', 'ESTIMULACION_TEMPRANA', 24, 3, 2,
           'GRUPAL', 'PRESENCIAL', 5, false, 1, 420, const []),
-      _ProgDef('ESTIMULACION_ACUATICA', 'Estimulación acuática', 'INGLES_ESTIMULACION', 'SEMANAL', 'ESTIMULACION_ACUATICA', 16, 2, 2,
-          'GRUPAL', 'PRESENCIAL', 5, false, 1, 320, const []),
-      _ProgDef('INGLES_KIDS', 'Inglés kids presencial', 'INGLES_ESTIMULACION', 'SEMANAL', 'INGLES', 48, 6, 2,
-          'GRUPAL', 'PRESENCIAL', 8, false, 1, 960, const []),
-      _ProgDef('INGLES_ONLINE', 'Inglés online', 'INGLES_ESTIMULACION', 'SEMANAL', 'INGLES', 48, 6, 2,
-          'GRUPAL', 'ONLINE', 30, false, 1, 540, const []),
+      _ProgDef('ESTIMULACION_TEMPRANA_INDIVIDUAL', 'Estimulación temprana individual', 'ESTIMULACION_TEMPRANA', 'SEMANAL', 'ESTIMULACION_TEMPRANA', 16, 4, 1,
+          'INDIVIDUAL', 'PRESENCIAL', 1, false, 1, 380, const []),
     ];
     final filasProg = <Map<String, Object?>>[];
     final filasFases = <Map<String, Object?>>[];
@@ -333,8 +327,8 @@ class GeneradorSemilla {
     _asignarRol(c1, 'COORDINADOR', sedeId: _sedes[2].id, area: 'NEURO');
     final c2 = _nuevoUsuario(_elegir(nombresAdultosM), _apellidos(), 'ismart.test', hash, prefijo: 'coord.neuro.villaflora');
     _asignarRol(c2, 'COORDINADOR', sedeId: villaflora, area: 'NEURO');
-    final c3 = _nuevoUsuario(_elegir(nombresAdultasF), _apellidos(), 'ismart.test', hash, prefijo: 'coord.ingles');
-    _asignarRol(c3, 'COORDINADOR', area: 'INGLES_ESTIMULACION');
+    final c3 = _nuevoUsuario(_elegir(nombresAdultasF), _apellidos(), 'ismart.test', hash, prefijo: 'coord.estimulacion');
+    _asignarRol(c3, 'COORDINADOR', area: 'ESTIMULACION_TEMPRANA');
     final c4 = _nuevoUsuario(_elegir(nombresAdultasF), _apellidos(), 'ismart.test', hash, prefijo: 'coord.dos.areas');
     _asignarRol(c4, 'COORDINADOR', sedeId: villaflora);
     _coordinadores.addAll([c1, c2, c3, c4]);
@@ -345,12 +339,12 @@ class GeneradorSemilla {
     const plantilla = [
       ['VALORACION', 'PSICOLOGIA'], ['VALORACION', 'TERAPIA_LENGUAJE'], ['TOMATIS'], ['TOMATIS', 'TERAPIA_OCUPACIONAL'],
       ['TERAPIA_LENGUAJE'], ['TERAPIA_LENGUAJE'], ['TERAPIA_OCUPACIONAL'], ['TERAPIA_OCUPACIONAL'],
-      ['PSICOLOGIA'], ['ESTIMULACION_TEMPRANA', 'ESTIMULACION_ACUATICA'], ['INGLES'], ['INGLES'],
+      ['PSICOLOGIA'], ['ESTIMULACION_TEMPRANA'], ['ESTIMULACION_TEMPRANA'], ['ESTIMULACION_TEMPRANA'],
     ];
     const profesiones = {
       'VALORACION': 'Psicóloga clínica', 'TOMATIS': 'Terapeuta Tomatis', 'TERAPIA_LENGUAJE': 'Terapeuta de lenguaje',
       'TERAPIA_OCUPACIONAL': 'Terapeuta ocupacional', 'PSICOLOGIA': 'Psicóloga infantil',
-      'ESTIMULACION_TEMPRANA': 'Estimuladora temprana', 'INGLES': 'Docente de inglés',
+      'ESTIMULACION_TEMPRANA': 'Estimuladora temprana',
     };
     const colores = ['#1D5F8A', '#2E7D5B', '#9A5B00', '#6B4FA3', '#B23A48', '#00796B', '#5D6D7E', '#C2185B'];
     var n = 0;
@@ -443,20 +437,20 @@ class GeneradorSemilla {
   static const _edades = {
     'TERAPIAS_ESPECIFICAS': (3, 10), 'TERAPIA_LENGUAJE': (3, 9), 'TERAPIA_OCUPACIONAL_GRUPAL': (4, 9),
     'TOMATIS_INTENSIVO': (4, 12), 'PSICOLOGIA_INFANTIL': (5, 13), 'ESTIMULACION_TEMPRANA': (1, 3),
-    'ESTIMULACION_ACUATICA': (1, 5), 'INGLES_KIDS': (5, 12), 'INGLES_ONLINE': (7, 14),
+    'ESTIMULACION_TEMPRANA_INDIVIDUAL': (0, 2),
   };
   static const _combinaciones = {
     'TERAPIA_LENGUAJE': 'TERAPIA_OCUPACIONAL_GRUPAL',
     'TERAPIAS_ESPECIFICAS': 'PSICOLOGIA_INFANTIL',
     'PSICOLOGIA_INFANTIL': 'TERAPIA_LENGUAJE',
-    'ESTIMULACION_TEMPRANA': 'ESTIMULACION_ACUATICA',
-    'TERAPIA_OCUPACIONAL_GRUPAL': 'INGLES_KIDS',
+    'TERAPIA_OCUPACIONAL_GRUPAL': 'TERAPIA_LENGUAJE',
+    'ESTIMULACION_TEMPRANA_INDIVIDUAL': 'ESTIMULACION_TEMPRANA',
   };
 
   void _planificarMatriculas() {
     const pesos = {
       'TERAPIAS_ESPECIFICAS': 18, 'TERAPIA_LENGUAJE': 18, 'TERAPIA_OCUPACIONAL_GRUPAL': 12, 'TOMATIS_INTENSIVO': 6,
-      'PSICOLOGIA_INFANTIL': 10, 'ESTIMULACION_TEMPRANA': 12, 'ESTIMULACION_ACUATICA': 8, 'INGLES_KIDS': 10, 'INGLES_ONLINE': 6,
+      'PSICOLOGIA_INFANTIL': 10, 'ESTIMULACION_TEMPRANA': 20, 'ESTIMULACION_TEMPRANA_INDIVIDUAL': 16,
     };
     for (final p in _pacientes) {
       final codigo = _elegirPeso(pesos.keys.toList(), pesos.values.toList());
@@ -507,8 +501,7 @@ class GeneradorSemilla {
 
   _Cohorte _cohortePara(_Mat m) {
     final prog = m.prog;
-    final online = prog.def.entrega == 'ONLINE';
-    final sede = online ? _sedes[0] : m.paciente.sede;
+    final sede = m.paciente.sede;
     final patronesPaciente = m.paciente.matriculas.where((x) => x.cohorte != null).expand((x) => x.cohorte!.patron).toSet();
     for (final c in _cohortes) {
       if (c.prog == prog && c.sede == sede && c.miembros.length < c.objetivo &&
@@ -530,10 +523,9 @@ class GeneradorSemilla {
       intentos++;
     } while (intentos < 20 && (patron.any(patronesPaciente.contains) ||
         _cohortes.any((c) => c.prof == prof && c.patron.any(patron.contains))));
-    final salaNombre = online ? 'Aula virtual' : prog.def.sub == 'ESTIMULACION_ACUATICA' && sede.salas.containsKey('Piscina') ? 'Piscina' : 'Sala grupal';
     final cohorte = _Cohorte(
-      id: _id(), codigo: 'G-${_grupo++}', prog: prog, sede: sede, prof: prof, salaId: sede.salas[salaNombre]!,
-      cupo: prog.def.cupo, objetivo: online ? _entre(8, 20) : _entre(3, prog.def.cupo),
+      id: _id(), codigo: 'G-${_grupo++}', prog: prog, sede: sede, prof: prof, salaId: sede.salas[prog.def.area == 'ESTIMULACION_TEMPRANA' ? 'Sala de estimulación' : 'Sala grupal']!,
+      cupo: prog.def.cupo, objetivo: _entre(3, prog.def.cupo),
       inicio: inicio, patron: patron,
     );
     _cohortes.add(cohorte);
@@ -659,7 +651,7 @@ class GeneradorSemilla {
     for (final p in _pacientes.where((p) => p.matriculas.isNotEmpty)) {
       final mats = p.matriculas.toList()..sort((a, b) => a.inicio.compareTo(b.inicio));
       final neuro = mats.first.prog.def.area == 'NEURO';
-      final codigo = neuro ? 'NESC-${_contratoNeuro++}' : 'IGE-${_contratoIngles++}';
+      final codigo = neuro ? 'NESC-${_contratoNeuro++}' : 'ESTE-${_contratoEstimulacion++}';
       final desde = mats.first.inicio;
       var hasta = desde;
       for (final m in mats) {
