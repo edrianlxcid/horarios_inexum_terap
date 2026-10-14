@@ -1,30 +1,45 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+import 'dart:convert';
 
-import 'package:flutter/material.dart';
+import 'package:centro_psicologia/features/herramienta_datos/domain/modelos.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:centro_psicologia/main.dart';
-
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  final tabla = Tabla.fromJson({
+    'esquema': 'personas',
+    'tabla': 'paciente_representantes',
+    'descripcion': null,
+    'soloLectura': false,
+    'archivable': false,
+    'columnas': [
+      {
+        'nombre': 'paciente_id', 'tipo': 'referencia', 'tipoSql': 'uuid', 'requerido': true, 'esClave': true,
+        'editable': true, 'referencia': {'esquema': 'personas', 'tabla': 'pacientes', 'columna': 'id'},
+      },
+      {
+        'nombre': 'representante_id', 'tipo': 'referencia', 'tipoSql': 'uuid', 'requerido': true, 'esClave': true,
+        'editable': true, 'referencia': {'esquema': 'personas', 'tabla': 'representantes', 'columna': 'id'},
+      },
+      {
+        'nombre': 'parentesco', 'tipo': 'opcion', 'tipoSql': 'text', 'requerido': true, 'esClave': false,
+        'editable': true, 'opciones': ['MADRE', 'PADRE'],
+      },
+    ],
+  });
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+  test('la clave compuesta viaja como JSON en base64url', () {
+    final clave = tabla.claveDe({'paciente_id': 'a', 'representante_id': 'b', 'parentesco': 'MADRE'});
+    final decodificada = jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(clave))));
+    expect(decodificada, {'paciente_id': 'a', 'representante_id': 'b'});
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+  test('los títulos se vuelven legibles', () {
+    expect(tabla.titulo, 'Paciente representantes');
+    expect(tabla.columnas.first.titulo, 'Paciente');
+    expect(tabla.modulo, 'Personas');
+  });
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  test('el título de un registro usa la etiqueta de su relación', () {
+    final fila = {'paciente_id': 'x', 'paciente_id__etiqueta': 'Mateo Andrade'};
+    expect(tabla.tituloDe(fila), 'Mateo Andrade');
   });
 }
