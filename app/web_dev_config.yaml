@@ -1,0 +1,6 @@
+# Servidor de desarrollo de Flutter Web (flutter run -d chrome).
+# En esta PC "localhost" se resuelve a IPv6 (::1) y el canal de depuración no
+# conecta; con 127.0.0.1 funciona. Así basta con: flutter run -d chrome
+server:
+  host: 127.0.0.1
+  port: 5173
