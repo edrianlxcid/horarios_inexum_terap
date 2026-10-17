@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 
@@ -7,7 +7,7 @@ import '../data/datos_api.dart';
 import '../domain/modelos.dart';
 import 'formulario_fila.dart';
 
-/// Lista paginada de una tabla con búsqueda, y acceso al formulario.
+/// Lista paginada de una tabla con bÃºsqueda, y acceso al formulario.
 /// En pantallas anchas muestra una tabla; en angostas, tarjetas.
 class VistaTabla extends StatefulWidget {
   const VistaTabla({super.key, required this.api, required this.tabla});
@@ -20,7 +20,7 @@ class VistaTabla extends StatefulWidget {
 }
 
 class _VistaTablaState extends State<VistaTabla> {
-  static const _ocultas = {'creado_por', 'actualizado_por', 'actualizado_en', 'cedula_huella', 'password_hash', 'mfa_secreto'};
+  static const _ocultas = {'empresa_id', 'creado_por', 'actualizado_por', 'actualizado_en', 'cedula_huella', 'password_hash', 'mfa_secreto'};
 
   PaginaFilas? _pagina;
   String? _error;
@@ -93,7 +93,7 @@ class _VistaTablaState extends State<VistaTabla> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Con menos de 900 px el título ya aparece en la barra superior.
+              // Con menos de 900 px el tÃ­tulo ya aparece en la barra superior.
               if (MediaQuery.sizeOf(context).width >= 900) ...[
                 Text(_t.modulo.toUpperCase(), style: tema.textTheme.labelSmall?.copyWith(letterSpacing: 0.8, color: tema.colorScheme.primary)),
                 const SizedBox(height: 2),
@@ -112,7 +112,7 @@ class _VistaTablaState extends State<VistaTabla> {
                   SizedBox(
                     width: amplio ? 320 : double.infinity,
                     child: TextField(
-                      decoration: const InputDecoration(hintText: 'Buscar…', prefixIcon: Icon(Icons.search, size: 20)),
+                      decoration: const InputDecoration(hintText: 'Buscarâ€¦', prefixIcon: Icon(Icons.search, size: 20)),
                       onChanged: _buscar,
                     ),
                   ),
@@ -139,7 +139,7 @@ class _VistaTablaState extends State<VistaTabla> {
                   : pagina.filas.isEmpty
                       ? _Aviso(
                           icono: Icons.inbox_outlined,
-                          texto: _busqueda.isEmpty ? 'Esta tabla está vacía.' : 'No hay resultados para "$_busqueda".',
+                          texto: _busqueda.isEmpty ? 'Esta tabla estÃ¡ vacÃ­a.' : 'No hay resultados para "$_busqueda".',
                         )
                       : amplio
                           ? _Tabla(tabla: _t, columnas: _columnasVisibles, filas: pagina.filas, alTocar: _abrir)
@@ -164,8 +164,8 @@ class _VistaTablaState extends State<VistaTabla> {
 /// Valor de una celda listo para mostrar.
 String textoCelda(Columna c, Map<String, dynamic> fila) {
   final valor = c.referencia != null ? (fila['${c.nombre}__etiqueta'] ?? fila[c.nombre]) : fila[c.nombre];
-  if (valor == null) return '—';
-  if (c.tipo == 'booleano') return valor.toString() == 'true' ? 'Sí' : 'No';
+  if (valor == null) return 'â€”';
+  if (c.tipo == 'booleano') return valor.toString() == 'true' ? 'SÃ­' : 'No';
   return valor.toString();
 }
 
@@ -232,7 +232,7 @@ class _Celda extends StatelessWidget {
   Widget build(BuildContext context) {
     final texto = textoCelda(columna, fila);
     final esquema = Theme.of(context).colorScheme;
-    if (columna.tipo == 'opcion' && texto != '—') {
+    if (columna.tipo == 'opcion' && texto != 'â€”') {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
         decoration: BoxDecoration(color: esquema.secondaryContainer, borderRadius: BorderRadius.circular(20)),
@@ -242,7 +242,7 @@ class _Celda extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (columna.tipo == 'cifrado' && texto != '—') ...[
+        if (columna.tipo == 'cifrado' && texto != 'â€”') ...[
           Icon(Icons.lock_outline, size: 14, color: esquema.primary),
           const SizedBox(width: 4),
         ],
@@ -326,7 +326,7 @@ class _Paginacion extends StatelessWidget {
           children: [
             Expanded(
               child: Text(
-                '$desde–$hasta de ${pagina.total}',
+                '$desdeâ€“$hasta de ${pagina.total}',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(fontFeatures: const [FontFeature.tabularFigures()]),
               ),
             ),

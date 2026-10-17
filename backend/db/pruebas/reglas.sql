@@ -7,6 +7,7 @@
 BEGIN;
 SET LOCAL app.omitir_auditoria = 'on';
 SET LOCAL TimeZone = 'America/Guayaquil';
+SELECT set_config('app.empresa_id', (SELECT id::text FROM organizacion.empresas WHERE codigo = 'ISMART'), true);
 
 CREATE TEMP TABLE resultados (regla text, ok boolean, detalle text) ON COMMIT DROP;
 
@@ -188,6 +189,43 @@ SELECT pg_temp.debe_fallar('Un terapeuta no puede clasificar la demanda',
 SELECT pg_temp.debe_fallar('Grupo con cupo mayor que el del programa',
   $q$INSERT INTO agenda.grupos (codigo, programa_id, sede_id, profesional_id, cupo_maximo)
      VALUES ('G-9901', '00000000-0000-0000-0000-0000000000b5', '00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000c1', 6)$q$);
+
+-- Auditoría activa: un alta normal debe funcionar y quedar en la bitácora.
+SET LOCAL app.omitir_auditoria = 'off';
+SELECT pg_temp.debe_funcionar('Alta con auditoría activa',
+  $q$INSERT INTO personas.representantes (cedula, nombres, apellidos) VALUES ('9900000099', 'Auditoría', 'Prueba')$q$);
+INSERT INTO resultados
+SELECT 'La bitácora guardó el alta', count(*) = 1, count(*) || ' registro(s) en la bitácora'
+FROM seguridad.bitacora WHERE tabla = 'representantes' AND despues ->> 'cedula' = '9900000099';
+SET LOCAL app.omitir_auditoria = 'on';
+
+-- Aislamiento entre empresas (con el usuario de la API, que no es superusuario).
+DO $$
+DECLARE
+  v_matriz   uuid := comun.empresa_actual();
+  v_otra     uuid;
+  v_visibles int;
+  v_bloqueo  boolean;
+BEGIN
+  INSERT INTO organizacion.empresas (codigo, nombre, rubro) VALUES ('PRUEBA_OTRA', 'Sucursal de prueba', 'Prueba')
+  RETURNING id INTO v_otra;
+  SET LOCAL ROLE ismart_app;
+  PERFORM set_config('app.empresa_id', v_otra::text, true);
+  SELECT count(*) INTO v_visibles FROM personas.pacientes;
+  BEGIN
+    INSERT INTO personas.pacientes (codigo_historia, nombres, apellidos, fecha_nacimiento, sede_principal_id, empresa_id)
+    VALUES ('HC-99999', 'Intruso', 'Prueba', '2020-01-01', '00000000-0000-0000-0000-0000000000a1', v_matriz);
+    v_bloqueo := false;
+  EXCEPTION WHEN OTHERS THEN
+    v_bloqueo := true;
+  END;
+  RESET ROLE;
+  PERFORM set_config('app.empresa_id', v_matriz::text, true);
+  INSERT INTO resultados VALUES
+    ('Otra empresa no ve los pacientes de la matriz', v_visibles = 0, v_visibles || ' pacientes visibles'),
+    ('Otra empresa no puede escribir datos en la matriz', v_bloqueo,
+     CASE WHEN v_bloqueo THEN 'Rechazado por el aislamiento por empresa' ELSE 'La base aceptó el registro' END);
+END $$;
 
 -- Resultado ---------------------------------------------------------------
 \echo

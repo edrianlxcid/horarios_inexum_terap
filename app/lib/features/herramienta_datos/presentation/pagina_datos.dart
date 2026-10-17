@@ -8,9 +8,18 @@ import 'vista_tabla.dart';
 /// Pantalla principal de la herramienta de datos: menú de módulos y tablas
 /// a la izquierda (o en un cajón en pantallas angostas) y la tabla elegida.
 class PaginaDatos extends StatefulWidget {
-  const PaginaDatos({super.key, required this.api});
+  const PaginaDatos({
+    super.key,
+    required this.api,
+    this.titulo = 'Datos iSmart',
+    this.subtitulo = 'Herramienta de desarrollo · datos ficticios',
+    this.tablaInicial = 'personas.pacientes',
+  });
 
   final DatosApi api;
+  final String titulo;
+  final String subtitulo;
+  final String tablaInicial;
 
   @override
   State<PaginaDatos> createState() => _PaginaDatosState();
@@ -34,7 +43,7 @@ class _PaginaDatosState extends State<PaginaDatos> {
       final tablas = await widget.api.tablas();
       setState(() {
         _tablas = tablas;
-        _actual ??= tablas.where((t) => t.id == 'personas.pacientes').firstOrNull ?? tablas.first;
+        _actual ??= tablas.where((t) => t.id == widget.tablaInicial).firstOrNull ?? tablas.first;
       });
     } on ErrorApi catch (e) {
       setState(() => _error = e.mensaje);
@@ -55,6 +64,8 @@ class _PaginaDatosState extends State<PaginaDatos> {
     if (_tablas == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
 
     final menu = _MenuTablas(
+      titulo: widget.titulo,
+      subtitulo: widget.subtitulo,
       tablas: _tablas!,
       actual: _actual,
       filtro: _filtro,
@@ -101,6 +112,8 @@ class _PaginaDatosState extends State<PaginaDatos> {
 
 class _MenuTablas extends StatelessWidget {
   const _MenuTablas({
+    required this.titulo,
+    required this.subtitulo,
     required this.tablas,
     required this.actual,
     required this.filtro,
@@ -113,6 +126,8 @@ class _MenuTablas extends StatelessWidget {
   final String filtro;
   final ValueChanged<String> alFiltrar;
   final ValueChanged<Tabla> alElegir;
+  final String titulo;
+  final String subtitulo;
 
   @override
   Widget build(BuildContext context) {
@@ -136,13 +151,13 @@ class _MenuTablas extends StatelessWidget {
               children: [
                 Icon(Icons.dataset_outlined, color: tema.colorScheme.primary),
                 const SizedBox(width: 10),
-                Expanded(child: Text('Datos iSmart', style: tema.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700))),
+                Expanded(child: Text(titulo, style: tema.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700))),
               ],
             ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: Text('Herramienta de desarrollo · datos ficticios', style: tema.textTheme.bodySmall),
+            child: Text(subtitulo, style: tema.textTheme.bodySmall),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),

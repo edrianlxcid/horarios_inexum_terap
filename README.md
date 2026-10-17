@@ -59,6 +59,34 @@ usuario de PostgreSQL con permisos mínimos.
    - App: http://localhost:5173
    - API: http://localhost:8080
 
+## Multiempresa
+
+La matriz y sus sucursales (que pueden tener otro rubro) comparten **una base y un enlace**,
+pero no los datos. Cada tabla de negocio tiene `empresa_id` y PostgreSQL (Row Level Security)
+solo deja ver y escribir los datos de la empresa activa. Al iniciar sesión, la API devuelve las
+empresas a las que pertenece el usuario; si son varias, la app pide elegir una y la envía en
+cada petición (cabecera `X-Empresa-Id`).
+
+Datos de prueba: **iSmart Salud** (matriz) e **iSmart Cuenca (ejemplo)**, una sucursal ficticia
+de psicopedagogía. La gerencia de la matriz tiene acceso a ambas.
+
+## Interfaces por rol
+
+| Rol | Pantalla | API |
+|-----|----------|-----|
+| Gerencia | Indicadores con evolución y fórmula; bonos de desempeño | `/api/v1/gerencia` |
+| Administración | Configuración: sedes, programas, terapeutas, jornadas, usuarios y roles | `/api/v1/admin/datos` |
+| Coordinación | Agenda del día, agendar con horas libres, pacientes, solicitudes, demanda | `/api/v1/coordinacion` |
+| Terapeuta | Agenda del día, asistencia, notas cifradas, ficha del paciente, tareas | `/api/v1/terapeuta` |
+| Familias | Próximas sesiones, progreso, tareas, evaluación del terapeuta, contrato vigente | `/api/v1/familia` |
+
+Todo lo de `/api/v1` exige sesión (JWT de 15 minutos que la app renueva sola). Cada carpeta de
+rol en `backend/routes/api/v1` tiene un `_middleware.dart` que exige ese rol. Las interfaces son
+sencillas a propósito: primero la estructura y las peticiones; el diseño visual viene después.
+
+**Para probar:** en la pantalla de inicio, el *acceso rápido de desarrollo* lista usuarios de
+prueba de cada empresa y rol (solo existe con `APP_ENV=development` y desde la misma PC).
+
 ### Herramienta de base de datos (`backend/tool/db.dart`)
 
 | Comando | Qué hace |

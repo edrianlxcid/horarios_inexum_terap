@@ -121,13 +121,16 @@ Future<void> _semilla(Config config) async {
     }
     stdout.writeln('… Generando datos ficticios (puede tardar un minuto)');
     final reloj = Stopwatch()..start();
-    final resumen = await GeneradorSemilla(
+    final resumen = await cargarDatosFicticios(
       db,
       llave: config.llaveCifrado,
       passwordUsuarios: config.passwordSemilla,
-    ).ejecutar();
-    stdout.writeln('✓ Datos ficticios cargados en ${reloj.elapsed.inSeconds} s:');
-    resumen.forEach((k, v) => stdout.writeln('    ${v.toString().padLeft(6)}  $k'));
+    );
+    stdout.writeln('✓ Datos ficticios cargados en ${reloj.elapsed.inSeconds} s');
+    resumen.forEach((empresa, datos) {
+      stdout.writeln('  $empresa');
+      datos.forEach((k, v) => stdout.writeln('    ${v.toString().padLeft(6)}  $k'));
+    });
   } finally {
     await db.close();
   }

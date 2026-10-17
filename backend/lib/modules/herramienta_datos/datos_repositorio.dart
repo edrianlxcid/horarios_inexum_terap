@@ -10,7 +10,8 @@ class DatosRepositorio {
 
   final Session _db;
   final String _llave;
-  List<TablaInfo>? _cache;
+  // El catálogo es igual para todas las empresas: se guarda una sola vez.
+  static List<TablaInfo>? _cache;
 
   static const esquemas = [
     'organizacion', 'catalogo', 'seguridad', 'personas', 'matriculas',

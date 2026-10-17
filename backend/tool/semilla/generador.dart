@@ -14,26 +14,116 @@ import 'dart:math';
 import 'package:postgres/postgres.dart';
 import 'package:uuid/uuid.dart';
 
+import 'perfiles.dart';
 import 'textos.dart';
 
 typedef Franja = (int dia, int hora);
 
+/// Carga todas las empresas de [perfiles] en una sola transacción.
+/// Devuelve un resumen por empresa.
+Future<Map<String, Map<String, int>>> cargarDatosFicticios(
+  Connection db, {
+  required String llave,
+  required String passwordUsuarios,
+}) async {
+  await db.execute("SET app.omitir_auditoria = 'on'");
+  await db.execute("SET TimeZone = 'America/Guayaquil'");
+  final hash = await db.execute(
+    Sql.named("SELECT crypt(@p:text, gen_salt('bf', 8))"),
+    parameters: {'p': passwordUsuarios},
+  );
+  final passwordHash = hash.first.first! as String;
+
+  return db.runTx((tx) async {
+    final resultado = <String, Map<String, int>>{};
+    final correos = <String>{};
+    String? matrizId;
+    String? gerenteMatriz;
+    for (final (i, perfil) in perfiles.indexed) {
+      final empresaId = perfil.esMatriz
+          ? (await tx.execute(
+              Sql.named('SELECT id::text FROM organizacion.empresas WHERE codigo = @c'),
+              parameters: {'c': perfil.codigo},
+            ))
+              .first
+              .first! as String
+          : (await tx.execute(
+              Sql.named(
+                'INSERT INTO organizacion.empresas (codigo, nombre, rubro, color_marca, empresa_matriz_id) '
+                'VALUES (@c, @n, @r, @k, CAST(@m:text AS uuid)) RETURNING id::text',
+              ),
+              parameters: {'c': perfil.codigo, 'n': perfil.nombre, 'r': perfil.rubro, 'k': perfil.color, 'm': matrizId},
+            ))
+              .first
+              .first! as String;
+      if (perfil.esMatriz) matrizId = empresaId;
+
+      final generador = GeneradorSemilla(
+        tx,
+        perfil: perfil,
+        llave: llave,
+        passwordHash: passwordHash,
+        correos: correos,
+        semilla: 20261005 + i,
+      );
+      resultado[perfil.nombre] = await generador.generar(empresaId);
+      if (perfil.esMatriz) gerenteMatriz = generador.gerentes.first;
+
+      // La gerencia de la matriz también puede entrar a la sucursal (elige empresa al iniciar sesión).
+      if (!perfil.esMatriz && gerenteMatriz != null) {
+        await tx.execute(
+          Sql.named(
+            'INSERT INTO seguridad.usuario_roles (usuario_id, rol_id, vigente_desde) '
+            "SELECT CAST(@u:text AS uuid), id, current_date - 365 FROM seguridad.roles WHERE codigo = 'GERENCIA'",
+          ),
+          parameters: {'u': gerenteMatriz},
+        );
+      }
+    }
+
+    // Indicadores de 30 días, calculados por empresa con el rol de reportes.
+    await tx.execute('SET LOCAL ROLE ismart_reportes');
+    final hoy = GeneradorSemilla._hoyEcuador();
+    final r = await tx.execute(
+      Sql.named('''
+        SELECT sum(reportes.calcular_todas_las_empresas(d::date))
+        FROM generate_series(CAST(@desde:text AS date), CAST(@hasta:text AS date), interval '1 day') d'''),
+      parameters: {
+        'desde': GeneradorSemilla._f(hoy.subtract(const Duration(days: 29))),
+        'hasta': GeneradorSemilla._f(hoy),
+      },
+    );
+    await tx.execute('RESET ROLE');
+    resultado['Todas las empresas'] = {'valores de indicadores (30 días)': int.parse(r.first.first.toString())};
+    return resultado;
+  });
+}
+
 class GeneradorSemilla {
   GeneradorSemilla(
     this._db, {
+    required this.perfil,
     required this.llave,
-    required this.passwordUsuarios,
+    required this.passwordHash,
+    required Set<String> correos,
     int semilla = 20261005,
-  }) : _r = Random(semilla);
+  })  : _r = Random(semilla),
+        _correos = correos;
 
-  final Connection _db;
+  final Session _db;
+  final PerfilEmpresa perfil;
   final String llave;
-  final String passwordUsuarios;
+  final String passwordHash;
   final Random _r;
   final _uuid = const Uuid();
 
+  /// Usuarios de gerencia creados (para dar acceso a otras empresas).
+  final gerentes = <String>[];
+
+  static DateTime _hoyEcuador() => _soloFecha(DateTime.now().toUtc().subtract(const Duration(hours: 5)));
+
   /// "Hoy" en hora local de Ecuador, como fecha sin zona horaria.
-  final DateTime hoy = _soloFecha(DateTime.now().toUtc().subtract(const Duration(hours: 5)));
+  final DateTime hoy = _hoyEcuador();
 
   final resumen = <String, int>{};
 
@@ -61,48 +151,41 @@ class GeneradorSemilla {
   final _ocupProf = <String, Set<int>>{};
   final _ocupPac = <String, Set<int>>{};
   final _cedulas = <String>{};
-  final _correos = <String>{};
+  final Set<String> _correos;
   var _historia = 0;
-  var _contratoNeuro = 5100;
-  var _contratoEstimulacion = 3200;
+  final _contadoresContrato = <String, int>{};
   var _grupo = 60;
 
   // ---------------------------------------------------------------------------
   // Orquestación
   // ---------------------------------------------------------------------------
-  Future<Map<String, int>> ejecutar() async {
-    await _db.execute("SET app.omitir_auditoria = 'on'");
-    await _db.execute("SET TimeZone = 'America/Guayaquil'");
-    final hash = await _db.execute(
-      Sql.named("SELECT crypt(@p:text, gen_salt('bf', 8))"),
-      parameters: {'p': passwordUsuarios},
-    );
-    final passwordHash = hash.first.first! as String;
+  /// Genera todos los datos de una empresa. Los registros toman la empresa
+  /// de app.empresa_id (valor por defecto de la columna empresa_id).
+  Future<Map<String, int>> generar(String empresaId) async {
+    final tx = _db;
+    await tx.execute(Sql.named("SELECT set_config('app.empresa_id', @e, true)"), parameters: {'e': empresaId});
+    final db = _Lotes(tx, llave, resumen);
+    await _cargarRoles(tx);
+    await _organizacion(db);
+    await _catalogo(db);
+    _personal(passwordHash);
+    _terapeutas(passwordHash);
+    _familias(passwordHash);
+    _planificarMatriculas();
+    _agendarGrupos();
+    _agendarIndividuales();
+    _agendarValoraciones();
+    _registrarAsistencia();
+    _armarContratos();
 
-    await _db.runTx((tx) async {
-      final db = _Lotes(tx, llave, resumen);
-      await _cargarRoles(tx);
-      await _organizacion(db);
-      await _catalogo(db);
-      _personal(passwordHash);
-      _terapeutas(passwordHash);
-      _familias(passwordHash);
-      _planificarMatriculas();
-      _agendarGrupos();
-      _agendarIndividuales();
-      _agendarValoraciones();
-      _registrarAsistencia();
-      _armarContratos();
-
-      await _insertarPersonas(db);
-      await _insertarAgenda(db);
-      await _cerrarEstados(db);
-      await _clinico(db);
-      await _desempeno(db, tx);
-      await _demandaYSolicitudes(db);
-      await _notificaciones(db);
-      await _indicadores(tx);
-    });
+    await _insertarPersonas(db);
+    await _insertarAgenda(db);
+    await _cerrarEstados(db);
+    await _clinico(db);
+    await _desempeno(db, tx);
+    await _demandaYSolicitudes(db);
+    await _notificaciones(db);
+    await _metas(tx);
     return resumen;
   }
 
@@ -116,39 +199,33 @@ class GeneradorSemilla {
   // Organización y catálogo
   // ---------------------------------------------------------------------------
   Future<void> _organizacion(_Lotes db) async {
+    // La geografía es compartida por todas las empresas.
     await db.insertar('organizacion.paises', [
       {'id': 'EC', 'nombre': 'Ecuador'},
-    ], {'id': 'char(2)', 'nombre': 'text'});
+    ], {'id': 'char(2)', 'nombre': 'text'}, siExiste: 'ON CONFLICT DO NOTHING');
     await db.insertar('organizacion.provincias', [
-      {'id': 17, 'pais_id': 'EC', 'nombre': 'Pichincha'},
-    ], {'id': 'int', 'pais_id': 'char(2)', 'nombre': 'text'});
+      {'id': perfil.provincia.$1, 'pais_id': 'EC', 'nombre': perfil.provincia.$2},
+    ], {'id': 'int', 'pais_id': 'char(2)', 'nombre': 'text'}, siExiste: 'ON CONFLICT DO NOTHING');
     await db.insertar('organizacion.cantones', [
-      {'id': 1701, 'provincia_id': 17, 'nombre': 'Quito'},
-    ], {'id': 'int', 'provincia_id': 'int', 'nombre': 'text'});
+      {'id': perfil.canton.$1, 'provincia_id': perfil.provincia.$1, 'nombre': perfil.canton.$2},
+    ], {'id': 'int', 'provincia_id': 'int', 'nombre': 'text'}, siExiste: 'ON CONFLICT DO NOTHING');
     await db.insertar('organizacion.parroquias', [
-      {'id': 170150, 'canton_id': 1701, 'nombre': 'La Magdalena'},
-      {'id': 170157, 'canton_id': 1701, 'nombre': 'Kennedy'},
-      {'id': 170184, 'canton_id': 1701, 'nombre': 'Tumbaco'},
-    ], {'id': 'int', 'canton_id': 'int', 'nombre': 'text'});
+      for (final s in perfil.sedes) {'id': s.parroquiaId, 'canton_id': perfil.canton.$1, 'nombre': s.parroquia},
+    ], {'id': 'int', 'canton_id': 'int', 'nombre': 'text'}, siExiste: 'ON CONFLICT DO NOTHING');
 
     final rucId = _id();
     await db.insertar('organizacion.rucs', [
-      {'id': rucId, 'numero_ruc': '9900000000001', 'canton_id': 1701, 'descripcion': 'RUC ficticio de pruebas'},
+      {'id': rucId, 'numero_ruc': perfil.ruc, 'canton_id': perfil.canton.$1, 'descripcion': 'RUC ficticio de pruebas'},
     ], {'id': 'uuid', 'numero_ruc': 'text', 'canton_id': 'int', 'descripcion': 'text'});
 
-    final sedes = [
-      ('VILLAFLORA', 'Villaflora', 170150, 'Av. Maldonado S10-45 y Gatazo'),
-      ('NORTE', 'Quito Norte', 170157, 'Av. De la Prensa N52-110'),
-      ('TUMBACO', 'Tumbaco', 170184, 'Av. Interoceánica km 14'),
-    ];
     final filasSedes = <Map<String, Object?>>[];
     final filasSalas = <Map<String, Object?>>[];
-    for (final (codigo, nombre, parroquia, direccion) in sedes) {
-      final sede = _Sede(_id(), codigo);
+    for (final s in perfil.sedes) {
+      final sede = _Sede(_id(), s.codigo);
       _sedes.add(sede);
       filasSedes.add({
-        'id': sede.id, 'codigo': codigo, 'nombre': nombre, 'parroquia_id': parroquia,
-        'ruc_id': rucId, 'direccion': direccion, 'telefono': '0900${_digitos(6)}',
+        'id': sede.id, 'codigo': s.codigo, 'nombre': s.nombre, 'parroquia_id': s.parroquiaId,
+        'ruc_id': rucId, 'direccion': s.direccion, 'telefono': '0900${_digitos(6)}',
       });
       final salas = [
         ('Consultorio 1', 1), ('Consultorio 2', 1), ('Consultorio 3', 1), ('Consultorio 4', 1),
@@ -167,7 +244,7 @@ class GeneradorSemilla {
     await db.insertar('organizacion.salas', filasSalas,
         {'id': 'uuid', 'sede_id': 'uuid', 'nombre': 'text', 'capacidad': 'smallint'});
 
-    // Feriados nacionales (fechas aproximadas) y el feriado local de Quito.
+    // Feriados nacionales (fechas aproximadas) y los locales de la ciudad.
     final nacionales = {
       '2026-01-01': 'Año Nuevo', '2026-02-16': 'Carnaval', '2026-02-17': 'Carnaval',
       '2026-04-03': 'Viernes Santo', '2026-05-01': 'Día del Trabajo', '2026-05-25': 'Batalla de Pichincha',
@@ -178,32 +255,23 @@ class GeneradorSemilla {
     };
     final filas = [
       for (final e in nacionales.entries) {'fecha': e.key, 'nombre': e.value, 'sede_id': null},
-      for (final s in _sedes) {'fecha': '2026-12-04', 'nombre': 'Fundación de Quito', 'sede_id': s.id},
+      for (final s in _sedes)
+        for (final e in perfil.feriadosLocales.entries) {'fecha': e.key, 'nombre': e.value, 'sede_id': s.id},
     ];
     _feriados
       ..addAll(nacionales.keys)
-      ..add('2026-12-04');
+      ..addAll(perfil.feriadosLocales.keys);
     await db.insertar('organizacion.feriados', filas, {'fecha': 'date', 'nombre': 'text', 'sede_id': 'uuid'});
   }
 
   Future<void> _catalogo(_Lotes db) async {
-    _areas['NEURO'] = _id();
-    _areas['ESTIMULACION_TEMPRANA'] = _id();
+    perfil.areas.forEach((codigo, _) => _areas[codigo] = _id());
     await db.insertar('catalogo.areas', [
-      {'id': _areas['NEURO'], 'codigo': 'NEURO', 'nombre': 'Neuro estimulación'},
-      {'id': _areas['ESTIMULACION_TEMPRANA'], 'codigo': 'ESTIMULACION_TEMPRANA', 'nombre': 'Estimulación temprana'},
+      for (final e in perfil.areas.entries) {'id': _areas[e.key], 'codigo': e.key, 'nombre': e.value},
     ], {'id': 'uuid', 'codigo': 'text', 'nombre': 'text'});
 
-    const subs = {
-      'VALORACION': ('NEURO', 'Valoración'),
-      'TOMATIS': ('NEURO', 'Método Tomatis'),
-      'TERAPIA_LENGUAJE': ('NEURO', 'Terapia de lenguaje'),
-      'TERAPIA_OCUPACIONAL': ('NEURO', 'Terapia ocupacional'),
-      'PSICOLOGIA': ('NEURO', 'Psicología infantil'),
-      'ESTIMULACION_TEMPRANA': ('ESTIMULACION_TEMPRANA', 'Estimulación temprana'),
-    };
     final filas = <Map<String, Object?>>[];
-    subs.forEach((codigo, v) {
+    perfil.subAreas.forEach((codigo, v) {
       final id = _id();
       _subAreas[codigo] = id;
       _subAreaArea[codigo] = v.$1;
@@ -217,34 +285,20 @@ class GeneradorSemilla {
       'INTENSIVO': ('Bloque intensivo', 'BLOQUE_INTENSIVO', false),
       'LIBRE': ('Sesiones sueltas', 'LIBRE', false),
     };
-    final filasTipos = <Map<String, Object?>>[];
-    tipos.forEach((codigo, v) {
-      final id = _id();
-      _tipos[codigo] = id;
-      filasTipos.add({'id': id, 'codigo': codigo, 'nombre': v.$1, 'patron': v.$2, 'es_valoracion': v.$3});
-    });
+    // Los tipos de programa son un catálogo común a todas las empresas.
+    final filasTipos = [
+      for (final e in tipos.entries)
+        {'codigo': e.key, 'nombre': e.value.$1, 'patron': e.value.$2, 'es_valoracion': e.value.$3},
+    ];
     await db.insertar('catalogo.tipos_programa', filasTipos,
-        {'id': 'uuid', 'codigo': 'text', 'nombre': 'text', 'patron': 'text', 'es_valoracion': 'boolean'});
+        {'codigo': 'text', 'nombre': 'text', 'patron': 'text', 'es_valoracion': 'boolean'},
+        siExiste: 'ON CONFLICT (codigo) DO NOTHING');
+    for (final f in await db.tx.execute('SELECT codigo, id::text FROM catalogo.tipos_programa')) {
+      _tipos[f[0]! as String] = f[1]! as String;
+    }
 
     // Programas DE EJEMPLO: reemplazar por la lista real del centro.
-    final defs = [
-      _ProgDef('VALORACION_INICIAL', 'Valoración inicial', 'NEURO', 'VALORACION', 'VALORACION', 4, null, null,
-          'INDIVIDUAL', 'PRESENCIAL', 1, false, 0, 60, const []),
-      _ProgDef('TERAPIAS_ESPECIFICAS', 'Terapias específicas', 'NEURO', 'SEMANAL', 'TOMATIS', 32, 4, 2,
-          'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 1280, const [('F1', 12, null), ('F2', 10, null), ('F3 - Integraciones', 10, 'TERAPIA_OCUPACIONAL')]),
-      _ProgDef('TERAPIA_LENGUAJE', 'Terapia de lenguaje', 'NEURO', 'SEMANAL', 'TERAPIA_LENGUAJE', 24, 4, 2,
-          'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 720, const [('Fase 1', 12, null), ('Fase 2', 12, null)]),
-      _ProgDef('TERAPIA_OCUPACIONAL_GRUPAL', 'Terapia ocupacional grupal', 'NEURO', 'SEMANAL', 'TERAPIA_OCUPACIONAL', 24, 3, 2,
-          'GRUPAL', 'PRESENCIAL', 5, true, 1, 480, const []),
-      _ProgDef('TOMATIS_INTENSIVO', 'Tomatis intensivo', 'NEURO', 'INTENSIVO', 'TOMATIS', 15, 1, 5,
-          'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 900, const []),
-      _ProgDef('PSICOLOGIA_INFANTIL', 'Psicología infantil', 'NEURO', 'SEMANAL', 'PSICOLOGIA', 10, 3, 1,
-          'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 350, const []),
-      _ProgDef('ESTIMULACION_TEMPRANA', 'Estimulación temprana grupal', 'ESTIMULACION_TEMPRANA', 'SEMANAL', 'ESTIMULACION_TEMPRANA', 24, 3, 2,
-          'GRUPAL', 'PRESENCIAL', 5, false, 1, 420, const []),
-      _ProgDef('ESTIMULACION_TEMPRANA_INDIVIDUAL', 'Estimulación temprana individual', 'ESTIMULACION_TEMPRANA', 'SEMANAL', 'ESTIMULACION_TEMPRANA', 16, 4, 1,
-          'INDIVIDUAL', 'PRESENCIAL', 1, false, 1, 380, const []),
-    ];
+    final defs = perfil.programas;
     final filasProg = <Map<String, Object?>>[];
     final filasFases = <Map<String, Object?>>[];
     for (final d in defs) {
@@ -282,8 +336,9 @@ class GeneradorSemilla {
 
     await db.insertar('clinico.plantillas_nota', [
       {'nombre': 'Nota general de sesión', 'campos': ['Objetivo trabajado', 'Actividades', 'Respuesta del paciente', 'Recomendaciones']},
-      {'nombre': 'Sesión Tomatis', 'programa_id': _programas['TOMATIS_INTENSIVO']!.id,
-       'campos': ['Fase de escucha', 'Tolerancia', 'Observaciones de la familia']},
+      if (_programas.containsKey('TOMATIS_INTENSIVO'))
+        {'nombre': 'Sesión Tomatis', 'programa_id': _programas['TOMATIS_INTENSIVO']!.id,
+         'campos': ['Fase de escucha', 'Tolerancia', 'Observaciones de la familia']},
     ], {'nombre': 'text', 'campos': 'jsonb', 'programa_id': 'uuid'});
   }
 
@@ -314,38 +369,35 @@ class GeneradorSemilla {
   }
 
   void _personal(String hash) {
-    final villaflora = _sedes[0].id;
-    for (var i = 1; i <= 2; i++) {
-      final u = _nuevoUsuario(_elegir(nombresAdultasF), _apellidos(), 'ismart.test', hash, prefijo: 'gerencia$i');
+    final dominio = perfil.dominio;
+    for (var i = 1; i <= perfil.gerentes; i++) {
+      final u = _nuevoUsuario(_elegir(nombresAdultasF), _apellidos(), dominio, hash, prefijo: 'gerencia$i');
       _asignarRol(u, 'GERENCIA');
-      final a = _nuevoUsuario(_elegir(nombresAdultosM), _apellidos(), 'ismart.test', hash, prefijo: 'admin$i');
+      gerentes.add(u);
+    }
+    for (var i = 1; i <= perfil.administradores; i++) {
+      final a = _nuevoUsuario(_elegir(nombresAdultosM), _apellidos(), dominio, hash, prefijo: 'admin$i');
       _asignarRol(a, 'ADMINISTRADOR');
     }
-    // Coordinadores por área, como se definió en la reunión del 5/10/2026.
-    final c1 = _nuevoUsuario(_elegir(nombresAdultasF), _apellidos(), 'ismart.test', hash, prefijo: 'coord.neuro.norte');
-    _asignarRol(c1, 'COORDINADOR', sedeId: _sedes[1].id, area: 'NEURO');
-    _asignarRol(c1, 'COORDINADOR', sedeId: _sedes[2].id, area: 'NEURO');
-    final c2 = _nuevoUsuario(_elegir(nombresAdultosM), _apellidos(), 'ismart.test', hash, prefijo: 'coord.neuro.villaflora');
-    _asignarRol(c2, 'COORDINADOR', sedeId: villaflora, area: 'NEURO');
-    final c3 = _nuevoUsuario(_elegir(nombresAdultasF), _apellidos(), 'ismart.test', hash, prefijo: 'coord.estimulacion');
-    _asignarRol(c3, 'COORDINADOR', area: 'ESTIMULACION_TEMPRANA');
-    final c4 = _nuevoUsuario(_elegir(nombresAdultasF), _apellidos(), 'ismart.test', hash, prefijo: 'coord.dos.areas');
-    _asignarRol(c4, 'COORDINADOR', sedeId: villaflora);
-    _coordinadores.addAll([c1, c2, c3, c4]);
-    resumen['personal (gerencia, administración, coordinación)'] = 8;
+    // Coordinadores por área y por sedes, como se definió en la reunión del 5/10/2026.
+    for (final c in perfil.coordinadores) {
+      final u = _nuevoUsuario(_elegir(nombresAdultasF), _apellidos(), dominio, hash, prefijo: c.prefijo);
+      if (c.sedes.isEmpty) {
+        _asignarRol(u, 'COORDINADOR', area: c.area);
+      } else {
+        for (final i in c.sedes) {
+          _asignarRol(u, 'COORDINADOR', sedeId: _sedes[i].id, area: c.area);
+        }
+      }
+      _coordinadores.add(u);
+    }
+    resumen['personal (gerencia, administración, coordinación)'] =
+        perfil.gerentes + perfil.administradores + perfil.coordinadores.length;
   }
 
   void _terapeutas(String hash) {
-    const plantilla = [
-      ['VALORACION', 'PSICOLOGIA'], ['VALORACION', 'TERAPIA_LENGUAJE'], ['TOMATIS'], ['TOMATIS', 'TERAPIA_OCUPACIONAL'],
-      ['TERAPIA_LENGUAJE'], ['TERAPIA_LENGUAJE'], ['TERAPIA_OCUPACIONAL'], ['TERAPIA_OCUPACIONAL'],
-      ['PSICOLOGIA'], ['ESTIMULACION_TEMPRANA'], ['ESTIMULACION_TEMPRANA'], ['ESTIMULACION_TEMPRANA'],
-    ];
-    const profesiones = {
-      'VALORACION': 'Psicóloga clínica', 'TOMATIS': 'Terapeuta Tomatis', 'TERAPIA_LENGUAJE': 'Terapeuta de lenguaje',
-      'TERAPIA_OCUPACIONAL': 'Terapeuta ocupacional', 'PSICOLOGIA': 'Psicóloga infantil',
-      'ESTIMULACION_TEMPRANA': 'Estimuladora temprana',
-    };
+    final plantilla = perfil.plantillaTerapeutas;
+    final profesiones = perfil.profesiones;
     const colores = ['#1D5F8A', '#2E7D5B', '#9A5B00', '#6B4FA3', '#B23A48', '#00796B', '#5D6D7E', '#C2185B'];
     var n = 0;
     for (final sede in _sedes) {
@@ -353,7 +405,7 @@ class GeneradorSemilla {
         final mujer = _r.nextDouble() < 0.75;
         final nombres = mujer ? _elegir(nombresAdultasF) : _elegir(nombresAdultosM);
         final apellidos = _apellidos();
-        final usuario = _nuevoUsuario(nombres, apellidos, 'ismart.test', hash);
+        final usuario = _nuevoUsuario(nombres, apellidos, perfil.dominio, hash);
         final area = _subAreaArea[subs.first]!;
         _asignarRol(usuario, 'TERAPEUTA', sedeId: sede.id, area: area);
         final manana = n.isEven;
@@ -376,11 +428,11 @@ class GeneradorSemilla {
       }
     }
     // Vacaciones de una semana y permisos de un día.
-    for (final p in (_profs.toList()..shuffle(_r)).take(8)) {
+    for (final p in (_profs.toList()..shuffle(_r)).take((_profs.length * 0.22).ceil())) {
       final lunes = _lunes(hoy.add(Duration(days: _entre(-100, 40))));
       p.ausencias.add((lunes, lunes.add(const Duration(days: 6)), 'VACACIONES'));
     }
-    for (final p in (_profs.toList()..shuffle(_r)).take(6)) {
+    for (final p in (_profs.toList()..shuffle(_r)).take((_profs.length * 0.17).ceil())) {
       final dia = _diaHabil(hoy.add(Duration(days: _entre(-60, 30))));
       p.ausencias.add((dia, dia.add(const Duration(days: 1)), _r.nextBool() ? 'PERMISO' : 'CAPACITACION'));
     }
@@ -388,17 +440,17 @@ class GeneradorSemilla {
   }
 
   void _familias(String hash) {
-    const familias = 175;
-    const pacientesTotal = 255;
+    final familias = perfil.familias;
+    final pacientesTotal = perfil.pacientes;
     final listaFamilias = <List<_Rep>>[];
     for (var i = 0; i < familias; i++) {
       final apellidoPadre = _elegir(apellidos);
       final apellidoMadre = _elegir(apellidos);
-      final sede = _elegirPeso(_sedes, const [40, 35, 25]);
+      final sede = _elegirPeso(_sedes, perfil.pesosSedes);
       final direccion = '${_elegir(calles)} ${_entre(1, 80)}-${_entre(10, 99)}';
       final parentesco = _elegirPeso(const ['MADRE', 'PADRE', 'ABUELA', 'TUTOR'], const [70, 24, 4, 2]);
       final reps = <_Rep>[_crearRep(parentesco, apellidoPadre, apellidoMadre, direccion, hash, sede)];
-      if (i < 30) {
+      if (i < perfil.familiasConDosRepresentantes) {
         reps.add(_crearRep(parentesco == 'MADRE' ? 'PADRE' : 'MADRE', apellidoPadre, apellidoMadre, direccion, hash, sede));
       }
       listaFamilias.add(reps);
@@ -424,7 +476,7 @@ class GeneradorSemilla {
     final mujer = parentesco == 'MADRE' || parentesco == 'ABUELA';
     final nombres = mujer ? _elegir(nombresAdultasF) : _elegir(nombresAdultosM);
     final apellidos = parentesco == 'PADRE' ? '$apPadre ${_elegir(apellidosLista)}' : '$apMadre ${_elegir(apellidosLista)}';
-    final usuario = _nuevoUsuario(nombres, apellidos, 'ejemplo.test', hash);
+    final usuario = _nuevoUsuario(nombres, apellidos, 'familias.${perfil.dominio}', hash);
     _asignarRol(usuario, 'REPRESENTANTE');
     final rep = _Rep(_id(), usuario, nombres, apellidos, parentesco, _cedula(), apPadre, apMadre, direccion, sede);
     _reps.add(rep);
@@ -434,27 +486,11 @@ class GeneradorSemilla {
   // ---------------------------------------------------------------------------
   // Matrículas y agenda
   // ---------------------------------------------------------------------------
-  static const _edades = {
-    'TERAPIAS_ESPECIFICAS': (3, 10), 'TERAPIA_LENGUAJE': (3, 9), 'TERAPIA_OCUPACIONAL_GRUPAL': (4, 9),
-    'TOMATIS_INTENSIVO': (4, 12), 'PSICOLOGIA_INFANTIL': (5, 13), 'ESTIMULACION_TEMPRANA': (1, 3),
-    'ESTIMULACION_TEMPRANA_INDIVIDUAL': (0, 2),
-  };
-  static const _combinaciones = {
-    'TERAPIA_LENGUAJE': 'TERAPIA_OCUPACIONAL_GRUPAL',
-    'TERAPIAS_ESPECIFICAS': 'PSICOLOGIA_INFANTIL',
-    'PSICOLOGIA_INFANTIL': 'TERAPIA_LENGUAJE',
-    'TERAPIA_OCUPACIONAL_GRUPAL': 'TERAPIA_LENGUAJE',
-    'ESTIMULACION_TEMPRANA_INDIVIDUAL': 'ESTIMULACION_TEMPRANA',
-  };
-
   void _planificarMatriculas() {
-    const pesos = {
-      'TERAPIAS_ESPECIFICAS': 18, 'TERAPIA_LENGUAJE': 18, 'TERAPIA_OCUPACIONAL_GRUPAL': 12, 'TOMATIS_INTENSIVO': 6,
-      'PSICOLOGIA_INFANTIL': 10, 'ESTIMULACION_TEMPRANA': 20, 'ESTIMULACION_TEMPRANA_INDIVIDUAL': 16,
-    };
+    final pesos = perfil.pesosProgramas;
     for (final p in _pacientes) {
       final codigo = _elegirPeso(pesos.keys.toList(), pesos.values.toList());
-      final (min, max) = _edades[codigo]!;
+      final (min, max) = perfil.edades[codigo]!;
       final meses = _entre(min * 12, max * 12 + 11);
       p.nacimiento = DateTime.utc(hoy.year, hoy.month, hoy.day).subtract(Duration(days: (meses * 30.4).round() + _entre(0, 25)));
       if (_r.nextDouble() < 0.08) {
@@ -463,7 +499,7 @@ class GeneradorSemilla {
       }
       final inicio = _diaHabil(hoy.add(Duration(days: _entre(-170, 28))));
       _nuevaMatricula(p, _programas[codigo]!, inicio);
-      final segundo = _combinaciones[codigo];
+      final segundo = perfil.combinaciones[codigo];
       if (segundo != null && _r.nextDouble() < 0.22) {
         _nuevaMatricula(p, _programas[segundo]!, _diaHabil(inicio.add(Duration(days: _entre(0, 20)))));
       }
@@ -594,7 +630,7 @@ class GeneradorSemilla {
   }
 
   void _agendarValoraciones() {
-    final valoracion = _programas['VALORACION_INICIAL']!;
+    final valoracion = _programas[perfil.programaValoracion]!;
     for (final p in _pacientes) {
       final primera = p.matriculas.isEmpty ? null : (p.matriculas.toList()..sort((a, b) => a.inicio.compareTo(b.inicio))).first;
       if (!p.prospecto && (primera == null || !primera.prog.def.requiereValoracion)) continue;
@@ -602,7 +638,7 @@ class GeneradorSemilla {
       final (desde, hasta) = p.prospecto
           ? (hoy.subtract(const Duration(days: 30)), hoy.add(const Duration(days: 14)))
           : (primera!.inicio.subtract(const Duration(days: 21)), primera.inicio.subtract(const Duration(days: 2)));
-      final evaluadores = _profs.where((x) => x.sede == p.sede && x.subAreas.contains('VALORACION')).toList();
+      final evaluadores = _profs.where((x) => x.sede == p.sede && x.subAreas.contains(perfil.subValoracion)).toList();
       var hechas = 0;
       for (var intento = 0; intento < 60 && hechas < cantidad; intento++) {
         final dia = desde.add(Duration(days: _r.nextInt(max(1, hasta.difference(desde).inDays))));
@@ -650,8 +686,9 @@ class GeneradorSemilla {
   void _armarContratos() {
     for (final p in _pacientes.where((p) => p.matriculas.isNotEmpty)) {
       final mats = p.matriculas.toList()..sort((a, b) => a.inicio.compareTo(b.inicio));
-      final neuro = mats.first.prog.def.area == 'NEURO';
-      final codigo = neuro ? 'NESC-${_contratoNeuro++}' : 'ESTE-${_contratoEstimulacion++}';
+      final prefijo = perfil.prefijosContrato[mats.first.prog.def.area]!;
+      final numero = _contadoresContrato[prefijo] = (_contadoresContrato[prefijo] ?? 3100 + 1000 * _contadoresContrato.length) + 1;
+      final codigo = '$prefijo-$numero';
       final desde = mats.first.inicio;
       var hasta = desde;
       for (final m in mats) {
@@ -961,7 +998,7 @@ class GeneradorSemilla {
       if (part.asistencia != 'ASISTIO') continue;
       final recomendado = part.paciente.matriculas.isNotEmpty
           ? part.paciente.matriculas.first.prog.id
-          : _elegir(_programas.values.where((p) => p.def.codigo != 'VALORACION_INICIAL').toList()).id;
+          : _elegir(_programas.values.where((p) => p.def.codigo != perfil.programaValoracion).toList()).id;
       valoraciones.add({
         'participante_id': part.id, 'profesional_id': s.prof.id, 'instrumento': _elegir(instrumentos),
         'resultados': 'Puntajes por área: atención ${_entre(40, 95)}, lenguaje ${_entre(40, 95)}, motricidad ${_entre(40, 95)}.',
@@ -1097,6 +1134,8 @@ class GeneradorSemilla {
       for (final (minimo, pct) in const [(4.5, 100), (3.5, 80), (2.5, 50), (1.5, 20), (0.0, 10)])
         {'politica_id': politica, 'puntaje_min': minimo, 'porcentaje': pct},
     ], {'politica_id': 'uuid', 'puntaje_min': 'numeric', 'porcentaje': 'numeric'});
+    // Se calcula con el usuario de la API para que solo vea las evaluaciones de esta empresa.
+    await tx.execute('SET LOCAL ROLE ismart_app');
     for (var i = 4; i >= 0; i--) {
       final inicio = DateTime.utc(hoy.year, hoy.month - i, 1);
       final fin = DateTime.utc(inicio.year, inicio.month + 1, 0);
@@ -1105,6 +1144,7 @@ class GeneradorSemilla {
         parameters: {'p': politica, 'i': _f(inicio), 'f': _f(fin)},
       );
     }
+    await tx.execute('RESET ROLE');
   }
 
   Future<void> _demandaYSolicitudes(_Lotes db) async {
@@ -1196,19 +1236,16 @@ class GeneradorSemilla {
     resumen['notificaciones'] = avisos.length;
   }
 
-  Future<void> _indicadores(Session tx) async {
+  /// Metas del mes para las sedes de esta empresa.
+  Future<void> _metas(Session tx) async {
     final mes = _f(DateTime.utc(hoy.year, hoy.month, 1));
     await tx.execute(Sql.named('''
       INSERT INTO reportes.metas (indicador_id, sede_id, periodo, valor_meta)
       SELECT i.id, s.id, CAST(@mes:text AS date), m.valor
       FROM (VALUES ('SATURACION_SEDE', 75), ('ASISTENCIA_30D', 90), ('CONTRATOS_POR_VENCER', 10)) AS m(codigo, valor)
       JOIN reportes.indicadores i ON i.codigo = m.codigo
-      CROSS JOIN organizacion.sedes s'''), parameters: {'mes': mes});
-    final r = await tx.execute(Sql.named('''
-      SELECT sum(reportes.calcular_indicadores(d::date))
-      FROM generate_series(CAST(@desde:text AS date), CAST(@hasta:text AS date), interval '1 day') d'''),
-        parameters: {'desde': _f(hoy.subtract(const Duration(days: 29))), 'hasta': _f(hoy)});
-    resumen['valores de indicadores (30 días)'] = int.parse(r.first.first.toString());
+      CROSS JOIN organizacion.sedes s
+      WHERE s.empresa_id = comun.empresa_actual()'''), parameters: {'mes': mes});
   }
 
   // ---------------------------------------------------------------------------
@@ -1355,6 +1392,7 @@ class _Lotes {
     List<Map<String, Object?>> filas,
     Map<String, String> tipos, {
     Map<String, String> expresiones = const {},
+    String siExiste = '',
   }) async {
     if (filas.isEmpty) return;
     final columnasJson = tipos.keys.toList();
@@ -1367,7 +1405,7 @@ class _Lotes {
       await tx.execute(
         Sql.named(
           'INSERT INTO $tabla (${destino.map((c) => '"$c"').join(', ')}) '
-          'SELECT $valores FROM jsonb_to_recordset(CAST(@datos:text AS jsonb)) AS x($definicion)',
+          'SELECT $valores FROM jsonb_to_recordset(CAST(@datos:text AS jsonb)) AS x($definicion) $siExiste',
         ),
         parameters: {'datos': jsonEncode(lote), if (usaLlave) 'llave': llave},
       );
@@ -1401,21 +1439,10 @@ class _Sede {
   final salas = <String, String>{};
 }
 
-class _ProgDef {
-  const _ProgDef(this.codigo, this.nombre, this.area, this.tipo, this.sub, this.total, this.meses, this.porSemana,
-      this.modalidad, this.entrega, this.cupo, this.requiereValoracion, this.antesEvaluacion, this.precio, this.fases);
-  final String codigo, nombre, area, tipo, sub, modalidad, entrega;
-  final int total, cupo, antesEvaluacion;
-  final int? meses, porSemana;
-  final bool requiereValoracion;
-  final double precio;
-  final List<(String, int, String?)> fases;
-}
-
 class _Prog {
   _Prog(this.id, this.def);
   final String id;
-  final _ProgDef def;
+  final ProgDef def;
   final fases = <_Fase>[];
 }
 

@@ -51,4 +51,12 @@ class Config {
   }
 
   String get passwordSemilla => _requerido('DEV_SEED_PASSWORD');
+
+  String get jwtSecreto {
+    final secreto = _requerido('JWT_SECRET');
+    if (secreto.length < 32) {
+      throw StateError('JWT_SECRET debe tener al menos 32 caracteres');
+    }
+    return secreto;
+  }
 }

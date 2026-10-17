@@ -71,7 +71,7 @@ class ColumnaInfo {
   /// Dato sensible cifrado con la llave de la API (se descifra para mostrarlo).
   final bool cifrada;
 
-  static const _sistema = {'creado_en', 'actualizado_en', 'cedula_huella'};
+  static const _sistema = {'creado_en', 'actualizado_en', 'cedula_huella', 'empresa_id'};
   static const _secretas = {'password_hash', 'refresh_token_hash', 'mfa_secreto', 'cedula_huella'};
 
   bool get esSecreta => _secretas.contains(nombre);

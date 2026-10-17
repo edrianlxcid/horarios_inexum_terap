@@ -1,12 +1,15 @@
 import '../../../core/network/cliente_api.dart';
 import '../domain/modelos.dart';
 
-/// Llamadas a la herramienta de datos de la API (/api/dev/datos).
+/// Llamadas a la edición genérica de tablas de la API. Se usa con dos bases:
+/// /api/dev/datos (herramienta de desarrollo) y /api/v1/admin/datos (Administración).
 class DatosApi {
-  DatosApi(this._cliente);
+  // Un parámetro con nombre no puede ser privado, por eso se asigna aparte.
+  // ignore: prefer_initializing_formals
+  DatosApi(this._cliente, {String base = '/api/dev/datos'}) : _base = base;
 
   final ClienteApi _cliente;
-  static const _base = '/api/dev/datos';
+  final String _base;
 
   Future<List<Tabla>> tablas() async {
     final datos = await _cliente.get<List<dynamic>>('$_base/tablas');

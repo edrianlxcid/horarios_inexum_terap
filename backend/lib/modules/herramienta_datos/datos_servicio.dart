@@ -1,52 +1,98 @@
 import 'dart:convert';
 
+import 'package:backend/core/db/base_datos.dart';
 import 'package:backend/modules/herramienta_datos/datos_repositorio.dart';
 import 'package:backend/modules/herramienta_datos/modelos.dart';
 
-/// Reglas de la herramienta de datos: qué se puede escribir y en qué formato.
+/// Empresa y usuario con los que se ejecuta una operación.
+typedef ContextoDatos = ({String empresaId, String? usuarioId});
+
+/// Edición genérica de tablas. Se usa en dos lugares:
+/// - la herramienta de desarrollo (todas las tablas), y
+/// - la pantalla de Administración (solo [permitidas], algunas en [soloLectura]).
 /// Las reglas de negocio las sigue validando la base de datos.
 class DatosServicio {
-  DatosServicio(this._repo);
+  DatosServicio(this._db, this._llave, {this.permitidas, this.soloLectura = const {}});
 
-  final DatosRepositorio _repo;
+  final BaseDatos _db;
+  final String _llave;
 
-  Future<List<Map<String, Object?>>> tablas() async =>
-      [for (final t in await _repo.tablas()) t.toJson()];
+  /// Tablas visibles (esquema.tabla). Null = todas.
+  final Set<String>? permitidas;
 
-  Future<Map<String, Object?>> filas(String esquema, String tabla, {String q = '', int pagina = 1, int tamano = 25}) async {
-    final info = await _repo.tabla(esquema, tabla);
-    return _repo.filas(info, busqueda: q, pagina: pagina < 1 ? 1 : pagina, tamano: tamano.clamp(5, 100));
-  }
+  /// Tablas que se pueden ver pero no editar.
+  final Set<String> soloLectura;
 
-  Future<List<Map<String, Object?>>> opciones(String esquema, String tabla, String q) async =>
-      _repo.opciones(await _repo.tabla(esquema, tabla), q);
+  Future<T> _con<T>(ContextoDatos ctx, Future<T> Function(DatosRepositorio repo) accion) =>
+      _db.enEmpresa(ctx.empresaId, (tx) => accion(DatosRepositorio(tx, _llave)), usuarioId: ctx.usuarioId);
 
-  Future<Map<String, Object?>> crear(String esquema, String tabla, Map<String, Object?> datos) async {
-    final info = await _escribible(esquema, tabla);
-    final valores = _limpiar(info, datos);
-    for (final c in info.columnas) {
-      final requerido = c.requerido && !c.tieneDefecto && !c.generada && c.editable;
-      if (requerido && valores[c.nombre] == null) {
-        throw ErrorDatos(422, 'Falta completar "${c.nombre}".');
-      }
+  Future<List<Map<String, Object?>>> tablas(ContextoDatos ctx) => _con(ctx, (repo) async {
+        return [
+          for (final t in await repo.tablas())
+            if (permitidas == null || permitidas!.contains(t.nombreCompleto))
+              {...t.toJson(), if (soloLectura.contains(t.nombreCompleto)) 'soloLectura': true},
+        ];
+      });
+
+  Future<Map<String, Object?>> filas(
+    ContextoDatos ctx,
+    String esquema,
+    String tabla, {
+    String q = '',
+    int pagina = 1,
+    int tamano = 25,
+  }) =>
+      _con(ctx, (repo) async {
+        final info = await _visible(repo, esquema, tabla);
+        return repo.filas(info, busqueda: q, pagina: pagina < 1 ? 1 : pagina, tamano: tamano.clamp(5, 100));
+      });
+
+  Future<List<Map<String, Object?>>> opciones(ContextoDatos ctx, String esquema, String tabla, String q) =>
+      _con(ctx, (repo) async => repo.opciones(await repo.tabla(esquema, tabla), q));
+
+  Future<Map<String, Object?>> crear(ContextoDatos ctx, String esquema, String tabla, Map<String, Object?> datos) =>
+      _con(ctx, (repo) async {
+        final info = await _escribible(repo, esquema, tabla);
+        final valores = _limpiar(info, datos);
+        for (final c in info.columnas) {
+          final requerido = c.requerido && !c.tieneDefecto && !c.generada && c.editable;
+          if (requerido && valores[c.nombre] == null) {
+            throw ErrorDatos(422, 'Falta completar "${c.nombre}".');
+          }
+        }
+        return repo.crear(info, valores);
+      });
+
+  Future<void> actualizar(
+    ContextoDatos ctx,
+    String esquema,
+    String tabla,
+    String claveCodificada,
+    Map<String, Object?> datos,
+  ) =>
+      _con(ctx, (repo) async {
+        final info = await _escribible(repo, esquema, tabla);
+        final valores = _limpiar(info, datos)..removeWhere((k, _) => info.columna(k)!.esClave);
+        await repo.actualizar(info, decodificarClave(claveCodificada), valores);
+      });
+
+  Future<String> eliminar(ContextoDatos ctx, String esquema, String tabla, String claveCodificada) =>
+      _con(ctx, (repo) async {
+        final info = await _escribible(repo, esquema, tabla);
+        return repo.eliminar(info, decodificarClave(claveCodificada));
+      });
+
+  Future<TablaInfo> _visible(DatosRepositorio repo, String esquema, String tabla) async {
+    final info = await repo.tabla(esquema, tabla);
+    if (permitidas != null && !permitidas!.contains(info.nombreCompleto)) {
+      throw ErrorDatos(404, 'No existe la tabla $esquema.$tabla');
     }
-    return _repo.crear(info, valores);
+    return info;
   }
 
-  Future<void> actualizar(String esquema, String tabla, String claveCodificada, Map<String, Object?> datos) async {
-    final info = await _escribible(esquema, tabla);
-    final valores = _limpiar(info, datos)..removeWhere((k, _) => info.columna(k)!.esClave);
-    await _repo.actualizar(info, decodificarClave(claveCodificada), valores);
-  }
-
-  Future<String> eliminar(String esquema, String tabla, String claveCodificada) async {
-    final info = await _escribible(esquema, tabla);
-    return _repo.eliminar(info, decodificarClave(claveCodificada));
-  }
-
-  Future<TablaInfo> _escribible(String esquema, String tabla) async {
-    final info = await _repo.tabla(esquema, tabla);
-    if (info.soloLectura) {
+  Future<TablaInfo> _escribible(DatosRepositorio repo, String esquema, String tabla) async {
+    final info = await _visible(repo, esquema, tabla);
+    if (info.soloLectura || soloLectura.contains(info.nombreCompleto)) {
       throw ErrorDatos(403, 'La tabla ${info.nombreCompleto} es de solo lectura.');
     }
     return info;
