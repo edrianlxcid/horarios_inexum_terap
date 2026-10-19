@@ -9,7 +9,7 @@ Future<Response> onRequest(RequestContext context) async {
   return conErrores(() async {
     final q = context.request.uri.queryParameters;
     return Response.json(
-      body: await context.read<Dependencias>().coordinacion.solicitudes(
+      body: await context.read<Dependencias>().coordinacion.solicitudes.lista(
             context.read<Sesion>(),
             estado: q['estado'] ?? 'PENDIENTE',
             area: q['area'],

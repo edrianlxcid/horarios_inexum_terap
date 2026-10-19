@@ -9,7 +9,7 @@ Future<Response> onRequest(RequestContext context) async {
   return conErrores(() async {
     final q = context.request.uri.queryParameters;
     final hoy = DateTime.now().toIso8601String().substring(0, 10);
-    final sesiones = await context.read<Dependencias>().coordinacion.agenda(
+    final sesiones = await context.read<Dependencias>().coordinacion.agenda.sesiones(
           context.read<Sesion>(),
           desde: q['desde'] ?? hoy,
           hasta: q['hasta'] ?? q['desde'] ?? hoy,

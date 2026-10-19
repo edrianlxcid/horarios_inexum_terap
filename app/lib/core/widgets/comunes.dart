@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../network/cliente_api.dart';
+import '../util/formatos.dart';
 
 /// Carga datos de forma asíncrona y muestra cargando, error con reintento o el contenido.
 /// Para volver a cargar con otros parámetros, cambia su `key` (por ejemplo, `ValueKey(dia)`).
@@ -64,6 +65,169 @@ class Aviso extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Encabezado de una página interna: flecha para volver (si hay a dónde),
+/// título, subtítulo y acciones a la derecha.
+class EncabezadoPagina extends StatelessWidget {
+  const EncabezadoPagina({super.key, required this.titulo, this.subtitulo, this.acciones = const []});
+
+  final String titulo;
+  final String? subtitulo;
+  final List<Widget> acciones;
+
+  @override
+  Widget build(BuildContext context) {
+    final texto = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 16, 4),
+      child: Row(
+        children: [
+          if (Navigator.of(context).canPop()) const BackButton() else const SizedBox(width: 8),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(titulo, style: texto.titleLarge?.copyWith(fontWeight: FontWeight.w600), overflow: TextOverflow.ellipsis),
+                if (subtitulo != null)
+                  Text(subtitulo!, style: texto.bodyMedium?.copyWith(color: Theme.of(context).hintColor), overflow: TextOverflow.ellipsis),
+              ],
+            ),
+          ),
+          ...acciones,
+        ],
+      ),
+    );
+  }
+}
+
+/// Bloque con título dentro de una ficha.
+class Seccion extends StatelessWidget {
+  const Seccion({super.key, required this.titulo, required this.child, this.accion});
+
+  final String titulo;
+  final Widget child;
+  final Widget? accion;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(child: Text(titulo, style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700))),
+                ?accion,
+              ],
+            ),
+            const SizedBox(height: 8),
+            child,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Par "etiqueta: valor" de una ficha.
+class Dato extends StatelessWidget {
+  const Dato(this.etiqueta, this.valor, {super.key});
+
+  final String etiqueta;
+  final String? valor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 130, child: Text(etiqueta, style: TextStyle(color: Theme.of(context).hintColor))),
+          Expanded(child: Text(valor == null || valor!.isEmpty ? '—' : valor!)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Avance "x de y" con barra.
+class Avance extends StatelessWidget {
+  const Avance({super.key, required this.valor, required this.total, this.ancho = 120});
+
+  final num valor;
+  final num total;
+  final double ancho;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: ancho,
+          child: LinearProgressIndicator(value: total == 0 ? 0 : (valor / total).clamp(0, 1).toDouble(), minHeight: 6,
+              borderRadius: BorderRadius.circular(3)),
+        ),
+        const SizedBox(width: 8),
+        Text('${Formatos.numero(valor)}/${Formatos.numero(total)}', style: const TextStyle(fontSize: 12)),
+      ],
+    );
+  }
+}
+
+/// Dos columnas en pantallas anchas; una sola en el celular.
+class DosColumnas extends StatelessWidget {
+  const DosColumnas({super.key, required this.izquierda, required this.derecha, this.corte = 900});
+
+  final List<Widget> izquierda;
+  final List<Widget> derecha;
+  final double corte;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, c) => c.maxWidth < corte
+          ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [...izquierda, ...derecha])
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: izquierda)),
+                const SizedBox(width: 12),
+                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: derecha)),
+              ],
+            ),
+    );
+  }
+}
+
+/// Lista desplegable compacta para filtros, con opción "todos".
+class FiltroLista<T> extends StatelessWidget {
+  const FiltroLista({super.key, required this.todos, required this.valor, required this.opciones, required this.alCambiar});
+
+  final String todos;
+  final T? valor;
+  final List<(T, String)> opciones;
+  final ValueChanged<T?> alCambiar;
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButton<T?>(
+      value: opciones.any((o) => o.$1 == valor) ? valor : null,
+      underline: const SizedBox.shrink(),
+      isDense: true,
+      items: [
+        DropdownMenuItem<T?>(value: null, child: Text(todos)),
+        for (final (v, texto) in opciones) DropdownMenuItem<T?>(value: v, child: Text(texto, overflow: TextOverflow.ellipsis)),
+      ],
+      onChanged: alCambiar,
     );
   }
 }

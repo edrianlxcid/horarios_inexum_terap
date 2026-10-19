@@ -49,9 +49,11 @@ String traducirError(ServerException e) {
     // Reglas propias (disparadores): el mensaje ya está en español.
     '23514' when !(e.message.contains('viola la restricción') || e.message.contains('violates check')) => e.message,
     '23514' => 'El valor no cumple una regla de la tabla (${e.constraintName}).',
-    '23P01' => e.constraintName == 'sesiones_sin_choque'
-        ? 'Choque de horario: el terapeuta ya tiene otra sesión en ese horario.'
-        : 'El registro se superpone con otro existente (${e.constraintName}).',
+    '23P01' => switch (e.constraintName) {
+        'sesiones_sin_choque' => 'Choque de horario: el terapeuta ya tiene otra sesión en ese horario.',
+        'jornadas_sin_superposicion' => 'Dos jornadas del mismo día se cruzan. Revisa las horas.',
+        _ => 'El registro se superpone con otro existente (${e.constraintName}).',
+      },
     '23505' => 'Ya existe un registro con ese valor. ${e.detail ?? ''}'.trim(),
     '23503' => e.message.contains('update or delete') || e.message.contains('actualizar o eliminar')
         ? 'No se puede quitar: otros registros dependen de este.'

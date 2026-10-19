@@ -727,10 +727,12 @@ class GeneradorSemilla {
         {
           'id': p.id, 'usuario_id': p.usuarioId, 'cedula': _cedula(), 'nombres': p.nombres, 'apellidos': p.apellidos,
           'profesion': p.profesion, 'color_agenda': p.color, 'fecha_ingreso': _f(hoy.subtract(Duration(days: _entre(120, 2000)))),
+          'telefono': '0900${_digitos(6)}',
+          'email': _usuarios.where((u) => u['id'] == p.usuarioId).firstOrNull?['email'],
         },
     ], {
       'id': 'uuid', 'usuario_id': 'uuid', 'cedula': 'text', 'nombres': 'text', 'apellidos': 'text',
-      'profesion': 'text', 'color_agenda': 'text', 'fecha_ingreso': 'date',
+      'profesion': 'text', 'color_agenda': 'text', 'fecha_ingreso': 'date', 'telefono': 'text', 'email': 'text',
     });
     await db.insertar('personas.profesional_sub_areas', [
       for (final p in _profs)

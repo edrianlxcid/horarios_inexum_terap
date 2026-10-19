@@ -8,7 +8,7 @@ Future<Response> onRequest(RequestContext context, String id) async {
   if (context.request.method != HttpMethod.put) return metodoNoPermitido();
   return conErrores(() async {
     final d = await cuerpoJson(context);
-    await context.read<Dependencias>().coordinacion.resolverSolicitud(
+    await context.read<Dependencias>().coordinacion.solicitudes.resolver(
           context.read<Sesion>(),
           id,
           requerido<String>(d, 'estado'),

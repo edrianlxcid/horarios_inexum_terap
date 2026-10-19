@@ -76,13 +76,30 @@ de psicopedagogía. La gerencia de la matriz tiene acceso a ambas.
 |-----|----------|-----|
 | Gerencia | Indicadores con evolución y fórmula; bonos de desempeño | `/api/v1/gerencia` |
 | Administración | Configuración: sedes, programas, terapeutas, jornadas, usuarios y roles | `/api/v1/admin/datos` |
-| Coordinación | Agenda del día, agendar con horas libres, pacientes, solicitudes, demanda | `/api/v1/coordinacion` |
+| Coordinación | Módulos: Agenda, Estudiantes, Horarios, Profesionales y Solicitudes (ver abajo) | `/api/v1/coordinacion` |
 | Terapeuta | Agenda del día, asistencia, notas cifradas, ficha del paciente, tareas | `/api/v1/terapeuta` |
 | Familias | Próximas sesiones, progreso, tareas, evaluación del terapeuta, contrato vigente | `/api/v1/familia` |
 
 Todo lo de `/api/v1` exige sesión (JWT de 15 minutos que la app renueva sola). Cada carpeta de
 rol en `backend/routes/api/v1` tiene un `_middleware.dart` que exige ese rol. Las interfaces son
 sencillas a propósito: primero la estructura y las peticiones; el diseño visual viene después.
+
+### Coordinación por módulos
+
+Menú lateral (abajo en el celular). Cada módulo tiene su propia navegación: las fichas se abren
+dentro del módulo y se vuelve con la flecha; tocar el módulo actual regresa a su pantalla principal.
+
+| Módulo | Qué muestra | API |
+|--------|-------------|-----|
+| Agenda | Sesiones del día; desde cada una se abre el profesional o el estudiante, o se cancela | `agenda`, `sesiones` |
+| Estudiantes | Listado con contrato, programa y avance, terapeuta y próxima sesión. Filtros por sede, estado, profesional y programa; búsqueda por nombre, historia, contrato o representante. Ficha completa y alta | `pacientes` |
+| Horarios | Semana de lunes a sábado: resumen por profesional y día, o grilla hora por hora de un profesional; tocar una hora libre abre "Agendar" ya completado | `horarios` |
+| Profesionales | Listado con especialidades, sede, horas de trabajo y ocupación de la semana. Ficha con horario y estudiantes que atiende. Alta con especialidades y horario (permiso `personas.profesionales.registrar`) | `profesionales` |
+| Solicitudes | Reprogramaciones y cancelaciones pendientes | `solicitudes` |
+
+En la base y en la API se llaman *pacientes*; en la pantalla de Coordinación, *estudiantes*.
+Cada parte del backend vive en su propio servicio (`backend/lib/modules/coordinacion/`) y todas
+filtran con el mismo alcance (`alcance.dart`): las sedes y áreas que coordina el usuario.
 
 **Para probar:** en la pantalla de inicio, el *acceso rápido de desarrollo* lista usuarios de
 prueba de cada empresa y rol (solo existe con `APP_ENV=development` y desde la misma PC).

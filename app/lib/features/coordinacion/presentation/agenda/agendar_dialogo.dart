@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 
-import '../../../core/dependencias.dart';
-import '../../../core/util/formatos.dart';
-import '../../../core/widgets/comunes.dart';
-import '../domain/modelos.dart';
+import '../../../../core/dependencias.dart';
+import '../../../../core/util/formatos.dart';
+import '../../../../core/widgets/comunes.dart';
+import '../../domain/modelos.dart';
 
-/// Agenda a un paciente: elige paciente, valoración o matrícula, terapeuta,
+/// Agenda a un estudiante: elige estudiante, valoración o matrícula, terapeuta,
 /// día y una hora libre (o un grupo con cupo). Las reglas las valida la base.
+/// Desde el horario semanal llega con el terapeuta, el día y la hora ya elegidos.
 Future<bool?> mostrarAgendar(
   BuildContext context, {
   required ContextoCoordinacion ctx,
@@ -14,26 +15,46 @@ Future<bool?> mostrarAgendar(
   DateTime? dia,
   String? pacienteId,
   String? pacienteNombre,
+  String? profesionalId,
+  String? hora,
 }) {
   return showDialog<bool>(
     context: context,
     builder: (_) => Dialog(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 620, maxHeight: 760),
-        child: _Agendar(ctx: ctx, area: area, dia: dia ?? DateTime.now(), pacienteId: pacienteId, pacienteNombre: pacienteNombre),
+        child: _Agendar(
+          ctx: ctx,
+          area: area,
+          dia: dia ?? DateTime.now(),
+          pacienteId: pacienteId,
+          pacienteNombre: pacienteNombre,
+          profesionalId: profesionalId,
+          hora: hora,
+        ),
       ),
     ),
   );
 }
 
 class _Agendar extends StatefulWidget {
-  const _Agendar({required this.ctx, required this.area, required this.dia, this.pacienteId, this.pacienteNombre});
+  const _Agendar({
+    required this.ctx,
+    required this.area,
+    required this.dia,
+    this.pacienteId,
+    this.pacienteNombre,
+    this.profesionalId,
+    this.hora,
+  });
 
   final ContextoCoordinacion ctx;
   final String? area;
   final DateTime dia;
   final String? pacienteId;
   final String? pacienteNombre;
+  final String? profesionalId;
+  final String? hora;
 
   @override
   State<_Agendar> createState() => _AgendarState();
@@ -44,9 +65,9 @@ class _AgendarState extends State<_Agendar> {
   String? _pacienteNombre;
   List<Map<String, dynamic>> _matriculas = const [];
   String _destino = 'VALORACION'; // 'VALORACION' o el id de una matrícula
-  String? _terapeuta;
+  late String? _terapeuta = widget.profesionalId;
   late DateTime _dia = widget.dia;
-  String? _hora;
+  late String? _hora = widget.hora;
   bool _guardando = false;
 
   @override
@@ -62,7 +83,7 @@ class _AgendarState extends State<_Agendar> {
       _matriculas = const [];
       _destino = 'VALORACION';
     });
-    final ficha = await Dependencias.de(context).coordinacion.paciente(id);
+    final ficha = await Dependencias.de(context).coordinacion.estudiante(id);
     if (!mounted) return;
     setState(() => _matriculas = (ficha['matriculas'] as List)
         .cast<Map<String, dynamic>>()
@@ -96,6 +117,8 @@ class _AgendarState extends State<_Agendar> {
   Widget build(BuildContext context) {
     final api = Dependencias.de(context).coordinacion;
     final terapeutas = widget.ctx.terapeutasDeArea(_areaDestino ?? widget.area);
+    // Si cambia lo que se agenda, el terapeuta elegido sigue solo si atiende esa área.
+    final terapeuta = terapeutas.any((t) => t.id == _terapeuta) ? _terapeuta : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -107,7 +130,7 @@ class _AgendarState extends State<_Agendar> {
           child: ListView(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             children: [
-              const Text('1. Paciente'),
+              const Text('1. Estudiante'),
               if (_pacienteId != null)
                 ListTile(
                   contentPadding: EdgeInsets.zero,
@@ -117,14 +140,14 @@ class _AgendarState extends State<_Agendar> {
                       : null,
                 )
               else
-                Autocomplete<Map<String, dynamic>>(
-                  displayStringForOption: (p) => '${p['apellidos']} ${p['nombres']} (${p['codigo_historia']})',
+                Autocomplete<EstudianteFila>(
+                  displayStringForOption: (p) => '${p.nombreCompleto} (${p.historia})',
                   optionsBuilder: (texto) async {
                     if (texto.text.trim().length < 2) return const [];
-                    final r = await api.pacientes(q: texto.text.trim(), area: widget.area);
-                    return (r['filas'] as List).cast<Map<String, dynamic>>();
+                    final r = await api.estudiantes(FiltroEstudiantes(q: texto.text.trim()), area: widget.area);
+                    return r.filas;
                   },
-                  onSelected: (p) => _elegirPaciente(p['id'] as String, '${p['nombres']} ${p['apellidos']}'),
+                  onSelected: (p) => _elegirPaciente(p.id, '${p.nombres} ${p.apellidos}'),
                   fieldViewBuilder: (context, controlador, foco, _) => TextField(
                     controller: controlador,
                     focusNode: foco,
@@ -146,15 +169,13 @@ class _AgendarState extends State<_Agendar> {
                 ],
                 onChanged: _pacienteId == null ? null : (v) => setState(() {
                   _destino = v!;
-                  _terapeuta = null;
-                  _hora = null;
                 }),
               ),
               const SizedBox(height: 16),
               const Text('3. Terapeuta'),
               DropdownButton<String>(
                 isExpanded: true,
-                value: terapeutas.any((t) => t.id == _terapeuta) ? _terapeuta : null,
+                value: terapeuta,
                 hint: const Text('Elige un terapeuta'),
                 items: [for (final t in terapeutas) DropdownMenuItem(value: t.id, child: Text('${t.nombre} · ${t.extra['profesion']}'))],
                 onChanged: (v) => setState(() {
@@ -168,10 +189,10 @@ class _AgendarState extends State<_Agendar> {
                 _dia = d;
                 _hora = null;
               })),
-              if (_terapeuta != null)
+              if (terapeuta != null)
                 Cargador<List<HoraDisponible>>(
-                  key: ValueKey('$_terapeuta${Formatos.fechaIso(_dia)}'),
-                  cargar: () => api.disponibilidad(_terapeuta!, _dia),
+                  key: ValueKey('$terapeuta${Formatos.fechaIso(_dia)}'),
+                  cargar: () => api.disponibilidad(terapeuta, _dia),
                   construir: (context, horas, _) {
                     if (horas.isEmpty) return const Text('El terapeuta no trabaja este día.');
                     return Wrap(
@@ -198,7 +219,7 @@ class _AgendarState extends State<_Agendar> {
         Padding(
           padding: const EdgeInsets.all(16),
           child: FilledButton(
-            onPressed: _pacienteId == null || _terapeuta == null || _hora == null || _guardando ? null : _confirmar,
+            onPressed: _pacienteId == null || terapeuta == null || _hora == null || _guardando ? null : _confirmar,
             child: Text(_hora == null ? 'Elige una hora' : 'Agendar el ${Formatos.fechaCorta(Formatos.fechaIso(_dia))} a las $_hora'),
           ),
         ),

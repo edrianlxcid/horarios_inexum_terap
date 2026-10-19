@@ -8,7 +8,7 @@ Future<Response> onRequest(RequestContext context) async {
   if (context.request.method != HttpMethod.post) return metodoNoPermitido();
   return conErrores(() async {
     final d = await cuerpoJson(context);
-    await context.read<Dependencias>().coordinacion.clasificarDemanda(
+    await context.read<Dependencias>().coordinacion.pacientes.clasificarDemanda(
           context.read<Sesion>(),
           pacienteId: requerido<String>(d, 'paciente_id'),
           nivelId: requerido<String>(d, 'nivel_id'),

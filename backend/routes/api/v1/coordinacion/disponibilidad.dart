@@ -14,7 +14,7 @@ Future<Response> onRequest(RequestContext context) async {
       return respuestaError(400, 'Indica el terapeuta y la fecha.');
     }
     return Response.json(
-      body: await context.read<Dependencias>().coordinacion.disponibilidad(context.read<Sesion>(), profesional, fecha),
+      body: await context.read<Dependencias>().coordinacion.agenda.disponibilidad(context.read<Sesion>(), profesional, fecha),
     );
   });
 }

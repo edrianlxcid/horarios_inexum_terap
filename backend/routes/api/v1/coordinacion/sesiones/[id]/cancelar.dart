@@ -8,7 +8,7 @@ Future<Response> onRequest(RequestContext context, String id) async {
   if (context.request.method != HttpMethod.post) return metodoNoPermitido();
   return conErrores(() async {
     final d = await cuerpoJson(context);
-    await context.read<Dependencias>().coordinacion.cancelarSesion(
+    await context.read<Dependencias>().coordinacion.agenda.cancelar(
           context.read<Sesion>(),
           id,
           requerido<String>(d, 'motivo'),

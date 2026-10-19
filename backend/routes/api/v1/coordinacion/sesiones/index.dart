@@ -7,7 +7,7 @@ import 'package:dart_frog/dart_frog.dart';
 Future<Response> onRequest(RequestContext context) async {
   if (context.request.method != HttpMethod.post) return metodoNoPermitido();
   return conErrores(() async {
-    final resultado = await context.read<Dependencias>().coordinacion.agendar(
+    final resultado = await context.read<Dependencias>().coordinacion.agenda.agendar(
           context.read<Sesion>(),
           await cuerpoJson(context),
         );
