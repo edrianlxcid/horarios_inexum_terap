@@ -37,13 +37,26 @@ class CoordinacionServicio {
           'especialidades': await filas(tx, '''
             SELECT sa.id::text, sa.nombre, sa.area_id::text FROM catalogo.sub_areas sa
             WHERE sa.activo AND ${Alcance.area('sa.area_id')} ORDER BY sa.nombre''', a.parametros),
+          // Quienes valoran entran aunque sean de otra área: también se valora,
+          // como excepción, a estudiantes de Estimulación temprana.
           'terapeutas': await filas(tx, '''
-            SELECT pr.id::text, pr.nombres || ' ' || pr.apellidos AS nombre, pr.profesion,
-                   array(SELECT DISTINCT sa.area_id::text FROM personas.profesional_sub_areas psa
-                         JOIN catalogo.sub_areas sa ON sa.id = psa.sub_area_id WHERE psa.profesional_id = pr.id) AS areas
-            FROM personas.profesionales pr
-            WHERE pr.activo AND pr.archivado_en IS NULL AND ${Alcance.profesional('pr.id')}
-            ORDER BY 2''', a.parametros),
+            WITH t AS (
+              SELECT pr.id, pr.nombres || ' ' || pr.apellidos AS nombre, pr.profesion,
+                     agenda.minutos_turno(pr.id) AS minutos_turno,
+                     array(SELECT DISTINCT sa.area_id::text FROM personas.profesional_sub_areas psa
+                           JOIN catalogo.sub_areas sa ON sa.id = psa.sub_area_id WHERE psa.profesional_id = pr.id) AS areas,
+                     EXISTS (SELECT 1 FROM personas.profesional_sub_areas psa
+                             JOIN catalogo.programas pg ON pg.sub_area_requerida_id = psa.sub_area_id AND pg.activo
+                             JOIN catalogo.tipos_programa tp ON tp.id = pg.tipo_programa_id AND tp.es_valoracion
+                             WHERE psa.profesional_id = pr.id) AS valora,
+                     ${Alcance.profesional('pr.id')} AS de_mi_area,
+                     EXISTS (SELECT 1 FROM agenda.jornadas j WHERE j.profesional_id = pr.id
+                             AND ${Alcance.jornadaVigente('j')} AND ${Alcance.sede('j.sede_id')}) AS de_mi_sede
+              FROM personas.profesionales pr
+              WHERE pr.activo AND pr.archivado_en IS NULL)
+            SELECT id::text, nombre, profesion, minutos_turno, areas, valora
+            FROM t WHERE de_mi_area OR (valora AND de_mi_sede)
+            ORDER BY nombre''', a.parametros),
           'programas': await filas(tx, '''
             SELECT pg.id::text, pg.nombre, pg.area_id::text, pg.modalidad, pg.cupo_maximo, t.es_valoracion
             FROM catalogo.programas pg JOIN catalogo.tipos_programa t ON t.id = pg.tipo_programa_id

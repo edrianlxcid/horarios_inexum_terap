@@ -6,6 +6,7 @@ import '../../../../core/widgets/comunes.dart';
 import '../../domain/modelos.dart';
 import '../coordinacion_comun.dart';
 import 'agendar_dialogo.dart';
+import 'participante_cita.dart';
 
 /// Sesiones de un día, con filtro por terapeuta. Desde cada sesión se abre
 /// la ficha del profesional o de sus estudiantes, o se cancela.
@@ -91,30 +92,36 @@ class _TarjetaSesion extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = sesion;
-    final nombres = s.participantes.map((p) => p['paciente']).join(', ');
+    final texto = Theme.of(context).textTheme;
     return Card(
-      child: ListTile(
-        leading: Text(Formatos.hora(s.inicio), style: Theme.of(context).textTheme.titleMedium),
-        title: Text('${s.programa ?? Formatos.etiqueta(s.tipo)}${s.grupo != null ? ' · ${s.grupo}' : ''}'),
-        subtitle: Text('${s.terapeuta} · ${s.sede} · ${s.participantes.length}/${s.cupo}'
-            '${nombres.isEmpty ? '' : '\n$nombres'}'),
-        isThreeLine: nombres.isNotEmpty,
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (s.estado != 'PROGRAMADA')
-              Etiqueta(Formatos.etiqueta(s.estado), tono: s.estado == 'CANCELADA' ? Tono.mal : Tono.neutro),
-            PopupMenuButton<VoidCallback>(
-              tooltip: 'Opciones',
-              onSelected: (accion) => accion(),
-              itemBuilder: (_) => [
-                PopupMenuItem(value: () => abrirProfesional(context, s.profesionalId), child: Text('Ver a ${s.terapeuta}')),
-                for (final p in s.participantes)
-                  PopupMenuItem(value: () => abrirEstudiante(context, p['paciente_id'] as String), child: Text('Ver a ${p['paciente']}')),
-                if (s.estado == 'PROGRAMADA')
-                  PopupMenuItem(value: () => _cancelar(context), child: const Text('Cancelar sesión')),
+            Row(
+              children: [
+                Text('${Formatos.hora(s.inicio)}–${Formatos.hora(s.fin)}', style: texto.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text('${s.programa ?? Formatos.etiqueta(s.tipo)}${s.grupo != null ? ' · ${s.grupo}' : ''} · '
+                      '${s.terapeuta} · ${s.sede} · ${s.participantes.length}/${s.cupo}', overflow: TextOverflow.ellipsis),
+                ),
+                if (s.estado != 'PROGRAMADA')
+                  Etiqueta(Formatos.etiqueta(s.estado), tono: s.estado == 'CANCELADA' ? Tono.mal : Tono.neutro),
+                PopupMenuButton<VoidCallback>(
+                  tooltip: 'Opciones',
+                  onSelected: (accion) => accion(),
+                  itemBuilder: (_) => [
+                    PopupMenuItem(value: () => abrirProfesional(context, s.profesionalId), child: Text('Ver a ${s.terapeuta}')),
+                    if (s.estado == 'PROGRAMADA')
+                      PopupMenuItem(value: () => _cancelar(context), child: const Text('Cancelar sesión')),
+                  ],
+                ),
               ],
             ),
+            for (final p in s.participantes)
+              LineaParticipante(participante: p, alAbrir: () => abrirEstudiante(context, p.pacienteId), alCambiar: alCambiar),
           ],
         ),
       ),

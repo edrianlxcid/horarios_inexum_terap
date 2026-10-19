@@ -94,6 +94,7 @@ class _VistaHorariosState extends State<VistaHorarios> {
                             ctx: amb.ctx, area: amb.area, dia: dia, profesionalId: p.id, hora: hora);
                         if (ok == true) setState(() => _version++);
                       },
+                      alCambiar: () => setState(() => _version++),
                     ),
                   ],
                 );

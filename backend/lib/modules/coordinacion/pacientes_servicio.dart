@@ -162,7 +162,7 @@ class PacientesCoordinacion {
     SELECT x.id::text AS participante_id, s.id::text AS sesion_id,
            to_char(s.inicio AT TIME ZONE 'America/Guayaquil', 'YYYY-MM-DD"T"HH24:MI') AS inicio,
            s.tipo, pg.nombre AS programa, s.profesional_id::text AS profesional_id,
-           pr.nombres || ' ' || pr.apellidos AS terapeuta, x.numero_sesion, x.asistencia
+           pr.nombres || ' ' || pr.apellidos AS terapeuta, x.numero_sesion, x.asistencia, x.observacion
     FROM agenda.participantes x JOIN agenda.sesiones s ON s.id = x.sesion_id
     JOIN personas.profesionales pr ON pr.id = s.profesional_id
     LEFT JOIN catalogo.programas pg ON pg.id = s.programa_id

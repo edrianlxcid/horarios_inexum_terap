@@ -68,7 +68,14 @@ class _AgendarState extends State<_Agendar> {
   late String? _terapeuta = widget.profesionalId;
   late DateTime _dia = widget.dia;
   late String? _hora = widget.hora;
+  final _nota = TextEditingController();
   bool _guardando = false;
+
+  @override
+  void dispose() {
+    _nota.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -85,10 +92,20 @@ class _AgendarState extends State<_Agendar> {
     });
     final ficha = await Dependencias.de(context).coordinacion.estudiante(id);
     if (!mounted) return;
-    setState(() => _matriculas = (ficha['matriculas'] as List)
-        .cast<Map<String, dynamic>>()
-        .where((m) => m['estado'] == 'EN_CURSO' && (m['por_agendar'] as int) > 0)
-        .toList());
+    setState(() {
+      _matriculas = (ficha['matriculas'] as List)
+          .cast<Map<String, dynamic>>()
+          .where((m) => m['estado'] == 'EN_CURSO' && (m['por_agendar'] as int) > 0)
+          .toList();
+      // Si se llegó desde el horario de alguien que no valora, se agenda su
+      // programa: se elige la primera matrícula del área de ese profesional.
+      final elegido = widget.ctx.terapeutas.where((t) => t.id == _terapeuta).firstOrNull;
+      if (elegido != null && elegido.extra['valora'] != true) {
+        final areas = (elegido.extra['areas'] as List).cast<String>();
+        final matricula = _matriculas.where((m) => areas.contains(m['area_id'])).firstOrNull;
+        if (matricula != null) _destino = matricula['id'] as String;
+      }
+    });
   }
 
   String? get _areaDestino => _destino == 'VALORACION'
@@ -105,6 +122,7 @@ class _AgendarState extends State<_Agendar> {
             inicio: '${Formatos.fechaIso(_dia)}T$_hora',
             tipo: _destino == 'VALORACION' ? 'VALORACION' : 'PROGRAMA',
             matriculaId: _destino == 'VALORACION' ? null : _destino,
+            observacion: _nota.text.trim().isEmpty ? null : _nota.text.trim(),
           ),
       exito: 'Sesión agendada',
     );
@@ -116,9 +134,13 @@ class _AgendarState extends State<_Agendar> {
   @override
   Widget build(BuildContext context) {
     final api = Dependencias.de(context).coordinacion;
-    final terapeutas = widget.ctx.terapeutasDeArea(_areaDestino ?? widget.area);
-    // Si cambia lo que se agenda, el terapeuta elegido sigue solo si atiende esa área.
-    final terapeuta = terapeutas.any((t) => t.id == _terapeuta) ? _terapeuta : null;
+    final valoracion = _destino == 'VALORACION';
+    // Valoraciones: solo quienes valoran (son de Neuro, pero también se valora,
+    // como excepción, a estudiantes de Estimulación temprana).
+    final terapeutas = valoracion ? widget.ctx.terapeutasQueValoran : widget.ctx.terapeutasDeArea(_areaDestino ?? widget.area);
+    // Si cambia lo que se agenda, el terapeuta elegido sigue solo si está en la nueva lista.
+    final elegido = terapeutas.where((t) => t.id == _terapeuta).firstOrNull;
+    final terapeuta = elegido?.id;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -183,6 +205,13 @@ class _AgendarState extends State<_Agendar> {
                   _hora = null;
                 }),
               ),
+              Text(
+                [
+                  if (valoracion) 'Solo aparecen quienes hacen valoraciones.',
+                  if (elegido != null) 'Turnos de ${elegido.extra['minutos_turno'] ?? 60} minutos.',
+                ].join(' '),
+                style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),
+              ),
               const SizedBox(height: 16),
               const Text('4. Día y hora'),
               SelectorDia(dia: _dia, texto: Formatos.fechaLarga(_dia), alCambiar: (d) => setState(() {
@@ -204,6 +233,7 @@ class _AgendarState extends State<_Agendar> {
                             label: Text(switch (h.estado) {
                               'LIBRE' => h.hora,
                               'OCUPADO' => '${h.hora} · ${h.programa ?? 'ocupado'} ${h.ocupados}/${h.cupo}',
+                              'PAUSA' => '${h.hora} · ${Formatos.etiqueta(h.pausa)}',
                               _ => '${h.hora} · ${Formatos.etiqueta(h.estado)}',
                             }),
                             selected: _hora == h.hora,
@@ -213,6 +243,12 @@ class _AgendarState extends State<_Agendar> {
                     );
                   },
                 ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _nota,
+                decoration: const InputDecoration(labelText: '5. Nota de coordinación (opcional)', hintText: 'Solo por hoy, desde esta semana, no mover…'),
+              ),
+              const SizedBox(height: 8),
             ],
           ),
         ),

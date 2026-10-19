@@ -98,6 +98,18 @@ dentro del módulo y se vuelve con la flecha; tocar el módulo actual regresa a 
 | Solicitudes | Reprogramaciones y cancelaciones pendientes | `solicitudes` |
 
 En la base y en la API se llaman *pacientes*; en la pantalla de Coordinación, *estudiantes*.
+
+**Turnos, como en los horarios que hoy lleva Coordinación** (migración 160):
+
+- El turno lo marca la especialidad principal del profesional (`catalogo.sub_areas.minutos_turno`):
+  Neuro cada hora (sesión de 45 minutos y 15 de descanso), Terapia de lenguaje cada 45 minutos
+  seguidos. Los turnos se cuentan desde el inicio de la jornada y otra vez después de cada pausa.
+- La duración real de la sesión la marca el programa (`duracion_sesion_min`).
+- Cupos: terapias grupales hasta 5; Terapia de lenguaje y valoraciones, 1.
+- Las valoraciones son de Neuro, pero la coordinación de Estimulación temprana puede agendar,
+  como excepción, a sus estudiantes con quienes valoran.
+- Cada cita lleva su nota de coordinación ("solo por hoy", "no mover", "rotativo") y se muestra
+  con contrato, edad y fase del estudiante.
 Cada parte del backend vive en su propio servicio (`backend/lib/modules/coordinacion/`) y todas
 filtran con el mismo alcance (`alcance.dart`): las sedes y áreas que coordina el usuario.
 

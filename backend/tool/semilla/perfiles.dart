@@ -5,13 +5,17 @@
 /// Definición de un programa de ejemplo.
 class ProgDef {
   const ProgDef(this.codigo, this.nombre, this.area, this.tipo, this.sub, this.total, this.meses, this.porSemana,
-      this.modalidad, this.entrega, this.cupo, this.requiereValoracion, this.antesEvaluacion, this.precio, this.fases);
+      this.modalidad, this.entrega, this.cupo, this.requiereValoracion, this.antesEvaluacion, this.precio, this.fases,
+      {this.duracion = 60});
   final String codigo, nombre, area, tipo, sub, modalidad, entrega;
   final int total, cupo, antesEvaluacion;
   final int? meses, porSemana;
   final bool requiereValoracion;
   final double precio;
   final List<(String, int, String?)> fases;
+
+  /// Minutos de cada sesión (Neuro y Terapia de lenguaje: 45).
+  final int duracion;
 }
 
 class SedeDef {
@@ -59,6 +63,7 @@ class PerfilEmpresa {
     required this.coordinadores,
     required this.dominio,
     required this.feriadosLocales,
+    this.minutosTurno = const {},
   });
 
   final String codigo, nombre, rubro, color;
@@ -84,6 +89,9 @@ class PerfilEmpresa {
   final List<CoordDef> coordinadores;
   final String dominio;
   final Map<String, String> feriadosLocales;
+
+  /// Turno de la agenda por especialidad (las que no aparecen: 60 minutos).
+  final Map<String, int> minutosTurno;
 }
 
 const perfilMatriz = PerfilEmpresa(
@@ -114,15 +122,15 @@ const perfilMatriz = PerfilEmpresa(
     ProgDef('VALORACION_INICIAL', 'Valoración inicial', 'NEURO', 'VALORACION', 'VALORACION', 4, null, null,
         'INDIVIDUAL', 'PRESENCIAL', 1, false, 0, 60, []),
     ProgDef('TERAPIAS_ESPECIFICAS', 'Terapias específicas', 'NEURO', 'SEMANAL', 'TOMATIS', 32, 4, 2,
-        'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 1280, [('F1', 12, null), ('F2', 10, null), ('F3 - Integraciones', 10, 'TERAPIA_OCUPACIONAL')]),
+        'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 1280, [('F1', 12, null), ('F2', 10, null), ('F3 - Integraciones', 10, 'TERAPIA_OCUPACIONAL')], duracion: 45),
     ProgDef('TERAPIA_LENGUAJE', 'Terapia de lenguaje', 'NEURO', 'SEMANAL', 'TERAPIA_LENGUAJE', 24, 4, 2,
-        'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 720, [('Fase 1', 12, null), ('Fase 2', 12, null)]),
+        'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 720, [('Fase 1', 12, null), ('Fase 2', 12, null)], duracion: 45),
     ProgDef('TERAPIA_OCUPACIONAL_GRUPAL', 'Terapia ocupacional grupal', 'NEURO', 'SEMANAL', 'TERAPIA_OCUPACIONAL', 24, 3, 2,
-        'GRUPAL', 'PRESENCIAL', 5, true, 1, 480, []),
+        'GRUPAL', 'PRESENCIAL', 5, true, 1, 480, [], duracion: 45),
     ProgDef('TOMATIS_INTENSIVO', 'Tomatis intensivo', 'NEURO', 'INTENSIVO', 'TOMATIS', 15, 1, 5,
-        'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 900, []),
+        'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 900, [], duracion: 45),
     ProgDef('PSICOLOGIA_INFANTIL', 'Psicología infantil', 'NEURO', 'SEMANAL', 'PSICOLOGIA', 10, 3, 1,
-        'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 350, []),
+        'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 350, [], duracion: 45),
     ProgDef('ESTIMULACION_TEMPRANA', 'Estimulación temprana grupal', 'ESTIMULACION_TEMPRANA', 'SEMANAL', 'ESTIMULACION_TEMPRANA', 24, 3, 2,
         'GRUPAL', 'PRESENCIAL', 5, false, 1, 420, []),
     ProgDef('ESTIMULACION_TEMPRANA_INDIVIDUAL', 'Estimulación temprana individual', 'ESTIMULACION_TEMPRANA', 'SEMANAL', 'ESTIMULACION_TEMPRANA', 16, 4, 1,
@@ -170,6 +178,8 @@ const perfilMatriz = PerfilEmpresa(
   ],
   dominio: 'ismart.test',
   feriadosLocales: {'2026-12-04': 'Fundación de Quito'},
+  // Terapia de lenguaje atiende en turnos de 45 minutos seguidos; el resto, cada hora.
+  minutosTurno: {'TERAPIA_LENGUAJE': 45},
 );
 
 /// Sucursal de EJEMPLO con otro rubro, para probar el aislamiento entre empresas.

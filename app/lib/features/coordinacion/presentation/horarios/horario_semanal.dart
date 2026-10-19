@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -6,6 +8,7 @@ import '../../../../core/util/formatos.dart';
 import '../../../../core/widgets/comunes.dart';
 import '../../domain/modelos.dart';
 import '../agenda/agendar_dialogo.dart';
+import '../agenda/participante_cita.dart';
 import '../coordinacion_comun.dart';
 
 /// Lunes de la semana de [dia].
@@ -71,66 +74,67 @@ class LeyendaHorario extends StatelessWidget {
       item(TipoCelda.pausa, 'Pausa'),
       item(TipoCelda.ausencia, 'Ausencia'),
       item(TipoCelda.feriado, 'Feriado'),
-      item(TipoCelda.fuera, 'Fuera de horario'),
     ]);
   }
 }
 
-/// Grilla hora × día (lunes a sábado) de un profesional.
+/// Semana de un profesional en columnas de lunes a sábado, cada una con sus
+/// turnos y pausas, como la hoja de horarios de Coordinación. En Neuro los
+/// turnos son de una hora; en Terapia de lenguaje, de 45 minutos seguidos.
 class GrillaSemanal extends StatelessWidget {
-  const GrillaSemanal({super.key, required this.semana, required this.profesional, this.alAgendar});
+  const GrillaSemanal({super.key, required this.semana, required this.profesional, this.alAgendar, this.alCambiar});
 
   final SemanaHorario semana;
   final ProfesionalSemana profesional;
 
-  /// Se llama al tocar una hora libre con el día y la hora ("09:00").
+  /// Se llama al tocar un turno libre, con el día y la hora de inicio ("09:45").
   final void Function(DateTime dia, String hora)? alAgendar;
+
+  /// Se llama cuando cambia algo de una cita (por ejemplo, su nota).
+  final VoidCallback? alCambiar;
 
   @override
   Widget build(BuildContext context) {
-    final (desde, hasta) = semana.rangoHoras([profesional]);
-    final borde = Theme.of(context).colorScheme.outlineVariant;
     final hoy = Formatos.fechaIso(DateTime.now());
+    final gris = TextStyle(color: Theme.of(context).hintColor, fontSize: 12);
     return LayoutBuilder(
       builder: (context, c) => SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: SizedBox(
-          width: c.maxWidth < 760 ? 760 : c.maxWidth,
-          child: Table(
-            border: TableBorder.all(color: borde),
-            columnWidths: const {0: FixedColumnWidth(56)},
-            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+          width: math.max(c.maxWidth, 6 * 150.0),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              TableRow(
-                children: [
-                  const SizedBox(height: 40),
-                  for (final d in semana.dias)
-                    Padding(
-                      padding: const EdgeInsets.all(6),
-                      child: Column(
-                        children: [
-                          Text(DateFormat('EEE d', 'es').format(d),
-                              style: TextStyle(fontWeight: Formatos.fechaIso(d) == hoy ? FontWeight.w800 : FontWeight.w600)),
-                          Text('${Formatos.numero(profesional.horasDel(d.weekday), decimales: 0)} h · '
-                              '${profesional.sesionesDel(d).length} ses.', style: const TextStyle(fontSize: 11)),
-                        ],
-                      ),
+              for (final d in semana.dias)
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Column(
+                            children: [
+                              Text(DateFormat('EEEE d', 'es').format(d),
+                                  style: TextStyle(fontWeight: Formatos.fechaIso(d) == hoy ? FontWeight.w800 : FontWeight.w600)),
+                              Text('${Formatos.numero(profesional.horasDel(d.weekday))} h · '
+                                  '${profesional.sesionesDel(d).length} ses.', style: gris),
+                            ],
+                          ),
+                        ),
+                        for (final f in profesional.franjasDel(d, semana.feriados))
+                          _CeldaHorario(
+                            franja: f,
+                            color: profesional.color,
+                            alCambiar: alCambiar,
+                            alTocarLibre: alAgendar == null ? null : () => alAgendar!(d, hhmm(f.inicio)),
+                          ),
+                        if (profesional.jornadasDel(d.weekday).isEmpty)
+                          Padding(padding: const EdgeInsets.all(8), child: Text('No trabaja', textAlign: TextAlign.center, style: gris)),
+                      ],
                     ),
-                ],
-              ),
-              for (var h = desde; h < hasta; h++)
-                TableRow(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(6),
-                      child: Text('${h.toString().padLeft(2, '0')}:00', style: const TextStyle(fontSize: 12)),
-                    ),
-                    for (final d in semana.dias) _CeldaHorario(
-                      celda: profesional.celda(d, h, semana.feriados),
-                      color: profesional.color,
-                      alTocarLibre: alAgendar == null ? null : () => alAgendar!(d, '${h.toString().padLeft(2, '0')}:00'),
-                    ),
-                  ],
+                  ),
                 ),
             ],
           ),
@@ -141,39 +145,44 @@ class GrillaSemanal extends StatelessWidget {
 }
 
 class _CeldaHorario extends StatelessWidget {
-  const _CeldaHorario({required this.celda, required this.color, this.alTocarLibre});
+  const _CeldaHorario({required this.franja, required this.color, this.alTocarLibre, this.alCambiar});
 
-  final Celda celda;
+  final FranjaHorario franja;
   final Color color;
   final VoidCallback? alTocarLibre;
+  final VoidCallback? alCambiar;
 
   @override
   Widget build(BuildContext context) {
+    final celda = franja.celda;
     final (fondo, frente) = coloresCelda(context, celda.tipo, profesional: color);
     final s = celda.sesion;
+    final pausa = celda.tipo == TipoCelda.pausa;
+    final hora = Text(franja.hora, style: TextStyle(fontSize: 11, color: Theme.of(context).hintColor));
     final contenido = switch (celda.tipo) {
-      TipoCelda.fuera => const SizedBox.shrink(),
-      TipoCelda.libre => Text('Libre', style: TextStyle(fontSize: 11, color: frente)),
-      TipoCelda.sesion => Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(s!.titulo, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-            Text('${s.inicio} · ${s.participantes.length}/${s.cupo}${s.grupo != null ? ' · ${s.grupo}' : ''}',
-                style: const TextStyle(fontSize: 11)),
-          ],
+      TipoCelda.libre => Text('Libre', style: TextStyle(fontSize: 12, color: frente)),
+      TipoCelda.sesion => Text(
+          '${s!.titulo} · ${s.participantes.length}/${s.cupo}${s.grupo != null ? ' · ${s.grupo}' : ''}',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
         ),
-      _ => Text(celda.texto ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: frente)),
+      _ => Text(celda.texto ?? '', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: frente)),
     };
     final caja = Container(
-      height: 46,
-      padding: const EdgeInsets.symmetric(horizontal: 6),
+      margin: const EdgeInsets.only(bottom: 2),
+      height: pausa ? 34 : 58,
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       decoration: BoxDecoration(
         color: fondo,
-        border: celda.tipo == TipoCelda.sesion ? Border(left: BorderSide(color: color, width: 3)) : null,
+        borderRadius: BorderRadius.circular(4),
+        border: celda.tipo == TipoCelda.sesion
+            ? Border(left: BorderSide(color: color, width: 3))
+            : Border.all(color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.5)),
       ),
-      alignment: Alignment.centerLeft,
-      child: contenido,
+      child: pausa
+          ? Row(children: [hora, const SizedBox(width: 6), Expanded(child: contenido)])
+          : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [hora, const SizedBox(height: 2), Expanded(child: contenido)]),
     );
     return switch (celda.tipo) {
       TipoCelda.libre when alTocarLibre != null => InkWell(onTap: alTocarLibre, child: caja),
@@ -182,28 +191,46 @@ class _CeldaHorario extends StatelessWidget {
     };
   }
 
-  void _verSesion(BuildContext context, SesionHorario s) => showDialog<void>(
-        context: context,
-        builder: (d) => AlertDialog(
-          title: Text(s.titulo),
-          content: Column(
+  /// Detalle de la cita: cada estudiante con contrato, edad, fase y nota.
+  /// Tocar un estudiante cierra el detalle y abre su ficha.
+  Future<void> _verSesion(BuildContext context, SesionHorario s) async {
+    var cambio = false;
+    final abrir = await showDialog<String>(
+      context: context,
+      builder: (d) => AlertDialog(
+        title: Text(s.titulo),
+        content: SizedBox(
+          width: 480,
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('${Formatos.fechaCorta(s.fecha)} · ${s.inicio} a ${s.fin} · ${s.sede}'),
+              Text('${Formatos.fechaCorta(s.fecha)} · ${s.inicio}–${s.fin} · ${s.sede}'),
               Text('${Formatos.etiqueta(s.tipo)}${s.grupo != null ? ' · grupo ${s.grupo}' : ''} · ${s.participantes.length} de ${s.cupo}'),
               const SizedBox(height: 12),
-              for (final p in s.participantes) Text('• $p'),
+              for (final p in s.participantes)
+                LineaParticipante(
+                  participante: p,
+                  alAbrir: () => Navigator.pop(d, p.pacienteId),
+                  alCambiar: () {
+                    cambio = true;
+                    Navigator.pop(d);
+                  },
+                ),
               if (s.participantes.isEmpty) const Text('Sin estudiantes.'),
             ],
           ),
-          actions: [TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cerrar'))],
         ),
-      );
+        actions: [TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cerrar'))],
+      ),
+    );
+    if (cambio) alCambiar?.call();
+    if (abrir != null && context.mounted) await abrirEstudiante(context, abrir);
+  }
 }
 
-/// Horario semanal de un profesional con su selector de semana. Al tocar una
-/// hora libre abre "Agendar" con el profesional, el día y la hora puestos.
+/// Horario semanal de un profesional con su selector de semana. Al tocar un
+/// turno libre abre "Agendar" con el profesional, el día y la hora puestos.
 class HorarioDeProfesional extends StatefulWidget {
   const HorarioDeProfesional({super.key, required this.profesionalId, this.semanaInicial});
 
@@ -241,6 +268,7 @@ class _HorarioDeProfesionalState extends State<HorarioDeProfesional> {
                 final ok = await mostrarAgendar(context, ctx: amb.ctx, area: amb.area, dia: dia, profesionalId: p.id, hora: hora);
                 if (ok == true) setState(() => _version++);
               },
+              alCambiar: () => setState(() => _version++),
             );
           },
         ),

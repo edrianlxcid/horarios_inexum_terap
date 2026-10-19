@@ -10,6 +10,18 @@ class AgendaCoordinacion {
 
   final BaseDatos _db;
 
+  /// Lo que Coordinación ve de cada estudiante en una cita, como en sus
+  /// horarios: contrato, nombre, edad, fase y observación.
+  static String _participante(String x, String pa) => '''
+    json_build_object('participante_id', $x.id, 'paciente_id', $pa.id, 'paciente', $pa.nombres || ' ' || $pa.apellidos,
+      'asistencia', $x.asistencia, 'numero_sesion', $x.numero_sesion, 'observacion', $x.observacion,
+      'edad_meses', (extract(year FROM age($pa.fecha_nacimiento)) * 12 + extract(month FROM age($pa.fecha_nacimiento)))::int,
+      'contrato', (SELECT c.codigo FROM matriculas.matriculas m JOIN matriculas.contratos c ON c.id = m.contrato_id
+                   WHERE m.id = $x.matricula_id),
+      'fase', coalesce((SELECT f.nombre FROM catalogo.programa_fases f WHERE f.id = $x.fase_id),
+                       (SELECT f.nombre FROM matriculas.matriculas m JOIN catalogo.programa_fases f ON f.id = m.fase_actual_id
+                        WHERE m.id = $x.matricula_id)))''';
+
   /// Sesiones del rango con su ocupación y participantes.
   Future<List<Map<String, dynamic>>> sesiones(Sesion s,
       {required String desde, required String hasta, String? area, String? sede, String? profesional}) {
@@ -19,9 +31,7 @@ class AgendaCoordinacion {
              to_char(s.fin AT TIME ZONE se.zona_horaria, 'YYYY-MM-DD"T"HH24:MI') AS fin,
              s.tipo, s.estado, s.cupo_maximo, se.nombre AS sede, pr.id::text AS profesional_id,
              pr.nombres || ' ' || pr.apellidos AS terapeuta, pg.nombre AS programa, g.codigo AS grupo,
-             coalesce((SELECT json_agg(json_build_object('participante_id', x.id, 'paciente_id', pa.id,
-                                'paciente', pa.nombres || ' ' || pa.apellidos, 'asistencia', x.asistencia,
-                                'numero_sesion', x.numero_sesion) ORDER BY pa.nombres)
+             coalesce((SELECT json_agg(${_participante('x', 'pa')} ORDER BY pa.nombres)
                        FROM agenda.participantes x JOIN personas.pacientes pa ON pa.id = x.paciente_id
                        WHERE x.sesion_id = s.id AND x.asistencia NOT IN ('CANCELADA', 'REPROGRAMADA')), '[]'::json) AS participantes
       FROM agenda.sesiones s
@@ -30,7 +40,11 @@ class AgendaCoordinacion {
       LEFT JOIN catalogo.programas pg ON pg.id = s.programa_id
       LEFT JOIN agenda.grupos g ON g.id = s.grupo_id
       WHERE (s.inicio AT TIME ZONE se.zona_horaria)::date BETWEEN CAST(@d:text AS date) AND CAST(@h:text AS date)
-        AND ${Alcance.sedeYArea('s.sede_id', 'pg.area_id')}
+        AND ((${Alcance.sedeYArea('s.sede_id', 'pg.area_id')})
+             -- Valoraciones de sus estudiantes aunque sean del área de Neuro (caso excepcional de Estimulación temprana).
+             OR (s.tipo = 'VALORACION' AND ${Alcance.sede('s.sede_id')}
+                 AND EXISTS (SELECT 1 FROM agenda.participantes vx JOIN personas.pacientes vp ON vp.id = vx.paciente_id
+                             WHERE vx.sesion_id = s.id AND ${Alcance.paciente('vp')})))
         AND (@sede:text = '' OR s.sede_id = CAST(nullif(@sede:text, '') AS uuid))
         AND (@prof:text = '' OR s.profesional_id = CAST(nullif(@prof:text, '') AS uuid))
       ORDER BY s.inicio, terapeuta''', {...a.parametros, 'd': desde, 'h': hasta, 'sede': sede ?? '', 'prof': profesional ?? ''}));
@@ -49,6 +63,7 @@ class AgendaCoordinacion {
       const hastaTz = "(CAST(@h:text AS timestamp) + interval '1 day') AT TIME ZONE 'America/Guayaquil'";
       final profesionales = await filas(tx, '''
         SELECT pr.id::text, pr.nombres || ' ' || pr.apellidos AS nombre, pr.profesion, pr.color_agenda AS color,
+               agenda.minutos_turno(pr.id) AS minutos_turno,
                coalesce((SELECT json_agg(json_build_object('dia', j.dia_semana, 'sede', se.nombre,
                                   'inicio', to_char(j.hora_inicio, 'HH24:MI'), 'fin', to_char(j.hora_fin, 'HH24:MI'))
                                   ORDER BY j.dia_semana, j.hora_inicio)
@@ -73,7 +88,7 @@ class AgendaCoordinacion {
                                   'inicio', to_char(ss.inicio AT TIME ZONE se.zona_horaria, 'HH24:MI'),
                                   'fin', to_char(ss.fin AT TIME ZONE se.zona_horaria, 'HH24:MI'),
                                   'programa', pg.nombre, 'grupo', g.codigo, 'sede', se.nombre, 'cupo', ss.cupo_maximo,
-                                  'participantes', (SELECT coalesce(json_agg(pa.nombres || ' ' || pa.apellidos ORDER BY pa.nombres), '[]'::json)
+                                  'participantes', (SELECT coalesce(json_agg(${_participante('x', 'pa')} ORDER BY pa.nombres), '[]'::json)
                                                     FROM agenda.participantes x JOIN personas.pacientes pa ON pa.id = x.paciente_id
                                                     WHERE x.sesion_id = ss.id AND x.asistencia NOT IN ('CANCELADA', 'REPROGRAMADA')))
                                   ORDER BY ss.inicio)
@@ -98,42 +113,72 @@ class AgendaCoordinacion {
     });
   }
 
-  /// Horas del día de un terapeuta: libre, ocupada (con cupo), pausa, ausencia o feriado.
+  /// Turnos del día de un terapeuta: libre, ocupado (con cupo), ausencia o
+  /// feriado, más sus pausas. Los turnos duran lo que marca su especialidad
+  /// (60 minutos en Neuro, 45 seguidos en Terapia de lenguaje) y se cuentan
+  /// desde el inicio de la jornada y otra vez después de cada pausa.
   Future<List<Map<String, dynamic>>> disponibilidad(Sesion s, String profesionalId, String fecha) {
     Alcance.de(s);
     return _db.conSesion(s, (tx) => filas(tx, '''
-      WITH j AS (
-        SELECT j.sede_id, j.hora_inicio, j.hora_fin FROM agenda.jornadas j
+      WITH turno AS (SELECT make_interval(mins => agenda.minutos_turno(CAST(@p:text AS uuid))) AS t),
+      j AS (
+        SELECT j.sede_id, tsrange(CAST(@f:text AS date) + j.hora_inicio, CAST(@f:text AS date) + j.hora_fin) AS r
+        FROM agenda.jornadas j
         WHERE j.profesional_id = CAST(@p:text AS uuid) AND j.dia_semana = extract(isodow FROM CAST(@f:text AS date))
           AND j.vigencia @> CAST(@f:text AS date)
-      ), horas AS (
-        SELECT j.sede_id, gs AS hora
-        FROM j, generate_series(CAST(@f:text AS date) + j.hora_inicio, CAST(@f:text AS date) + j.hora_fin - interval '1 hour',
-                                interval '1 hour') gs
+      ), p AS (
+        SELECT pa.tipo, tsrange(CAST(@f:text AS date) + pa.hora_inicio, CAST(@f:text AS date) + pa.hora_fin) AS r
+        FROM agenda.pausas pa
+        WHERE pa.profesional_id = CAST(@p:text AS uuid) AND pa.dia_semana = extract(isodow FROM CAST(@f:text AS date))
+          AND pa.vigente_desde <= CAST(@f:text AS date) AND coalesce(pa.vigente_hasta, 'infinity') >= CAST(@f:text AS date)
+      ), tramos AS (
+        -- La jornada sin sus pausas: cada tramo se divide en turnos.
+        SELECT j.sede_id, unnest(tsmultirange(j.r) - coalesce((SELECT range_agg(p.r) FROM p), '{}'::tsmultirange)) AS r
+        FROM j
+      ), franjas AS (
+        SELECT tr.sede_id, gs AS ini, gs + tu.t AS fin, NULL::text AS pausa
+        FROM tramos tr, turno tu, generate_series(lower(tr.r), upper(tr.r) - tu.t, tu.t) gs
+        UNION ALL
+        SELECT j.sede_id, lower(p.r), upper(p.r), p.tipo FROM p JOIN j ON j.r && p.r
       )
-      SELECT to_char(h.hora, 'HH24:MI') AS hora, se.nombre AS sede,
+      SELECT to_char(fr.ini, 'HH24:MI') AS hora, to_char(fr.fin, 'HH24:MI') AS fin, se.nombre AS sede,
              CASE
+               WHEN fr.pausa IS NOT NULL THEN 'PAUSA'
                WHEN EXISTS (SELECT 1 FROM organizacion.feriados f WHERE f.fecha = CAST(@f:text AS date)
-                            AND (f.sede_id IS NULL OR f.sede_id = h.sede_id)) THEN 'FERIADO'
-               WHEN EXISTS (SELECT 1 FROM agenda.pausas pa WHERE pa.profesional_id = CAST(@p:text AS uuid)
-                            AND pa.dia_semana = extract(isodow FROM h.hora)
-                            AND h.hora::time < pa.hora_fin AND (h.hora + interval '1 hour')::time > pa.hora_inicio) THEN 'PAUSA'
+                            AND (f.sede_id IS NULL OR f.sede_id = fr.sede_id)) THEN 'FERIADO'
                WHEN EXISTS (SELECT 1 FROM agenda.ausencias au WHERE au.profesional_id = CAST(@p:text AS uuid)
-                            AND tstzrange(au.inicio, au.fin) && tstzrange(h.hora AT TIME ZONE se.zona_horaria,
-                                                                         (h.hora + interval '1 hour') AT TIME ZONE se.zona_horaria))
+                            AND tstzrange(au.inicio, au.fin) && tstzrange(fr.ini AT TIME ZONE se.zona_horaria,
+                                                                         fr.fin AT TIME ZONE se.zona_horaria))
                  THEN 'AUSENCIA'
                WHEN s.id IS NOT NULL THEN 'OCUPADO'
                ELSE 'LIBRE'
              END AS estado,
-             s.id::text AS sesion_id, pg.nombre AS programa, s.cupo_maximo,
+             fr.pausa, s.id::text AS sesion_id, pg.nombre AS programa, s.cupo_maximo,
              (SELECT count(*) FROM agenda.participantes x WHERE x.sesion_id = s.id
               AND x.asistencia NOT IN ('CANCELADA', 'REPROGRAMADA'))::int AS ocupados
-      FROM horas h
-      JOIN organizacion.sedes se ON se.id = h.sede_id
-      LEFT JOIN agenda.sesiones s ON s.profesional_id = CAST(@p:text AS uuid) AND s.estado <> 'CANCELADA'
-           AND s.rango && tstzrange(h.hora AT TIME ZONE se.zona_horaria, (h.hora + interval '1 hour') AT TIME ZONE se.zona_horaria)
+      FROM franjas fr
+      JOIN organizacion.sedes se ON se.id = fr.sede_id
+      LEFT JOIN LATERAL (
+        SELECT x.* FROM agenda.sesiones x
+        WHERE fr.pausa IS NULL AND x.profesional_id = CAST(@p:text AS uuid) AND x.estado <> 'CANCELADA'
+          AND x.rango && tstzrange(fr.ini AT TIME ZONE se.zona_horaria, fr.fin AT TIME ZONE se.zona_horaria)
+        ORDER BY x.inicio LIMIT 1) s ON true
       LEFT JOIN catalogo.programas pg ON pg.id = s.programa_id
-      ORDER BY h.hora''', {'p': profesionalId, 'f': fecha}));
+      ORDER BY fr.ini''', {'p': profesionalId, 'f': fecha}));
+  }
+
+  /// Nota de coordinación de una cita ("desde el 12 de octubre", "no mover"...).
+  Future<void> observacion(Sesion s, String participanteId, String? texto) {
+    final a = Alcance.de(s);
+    return _db.conSesion(s, (tx) async {
+      final r = await consultar(tx, '''
+        UPDATE agenda.participantes x SET observacion = nullif(trim(@t:text), ''), actualizado_por = CAST(@u:text AS uuid)
+        FROM agenda.sesiones ss, personas.pacientes pa
+        WHERE x.id = CAST(@id:text AS uuid) AND ss.id = x.sesion_id AND pa.id = x.paciente_id
+          AND ${Alcance.sede('ss.sede_id')} AND ${Alcance.paciente('pa')}''',
+          {...a.parametros, 't': texto ?? '', 'u': s.usuarioId, 'id': participanteId});
+      if (r.affectedRows == 0) throw ErrorDatos(404, 'Esa cita no existe o no es de tu coordinación.');
+    });
   }
 
   /// Agenda a un paciente con un terapeuta a una hora. Si el terapeuta ya
@@ -154,9 +199,11 @@ class AgendaCoordinacion {
     final p = {
       ...a.parametros,
       'pac': d['paciente_id'], 'prof': d['profesional_id'], 'ini': d['inicio'].toString().replaceFirst('T', ' '),
-      'mat': d['matricula_id'] ?? '', 'tipo': tipo, 'u': s.usuarioId,
+      'mat': d['matricula_id'] ?? '', 'tipo': tipo, 'u': s.usuarioId, 'obs': d['observacion'] as String? ?? '',
     };
     return _db.conSesion(s, (tx) async {
+      final paciente = await fila(tx, 'SELECT 1 FROM personas.pacientes pa WHERE pa.id = CAST(@pac:text AS uuid) AND ${Alcance.paciente('pa')}', p);
+      if (paciente == null) throw ErrorDatos(404, 'Ese estudiante no está en tu coordinación.');
       final prog = await fila(tx, tipo == 'VALORACION'
           ? '''SELECT pg.id::text, pg.cupo_maximo, pg.modalidad, pg.duracion_sesion_min, pg.area_id::text
                FROM catalogo.programas pg JOIN catalogo.tipos_programa t ON t.id = pg.tipo_programa_id
@@ -179,7 +226,12 @@ class AgendaCoordinacion {
           AND j.vigencia @> CAST(@ini:text AS timestamp)::date
         LIMIT 1''', p);
       if (sede == null) throw ErrorDatos(422, 'El terapeuta no trabaja ese día.');
-      final enAlcance = await fila(tx, '''
+      // Las valoraciones son de Neuro, pero también se valora (como excepción) a
+      // estudiantes de Estimulación temprana: para ellas basta con que la sede
+      // sea del coordinador. Lo demás debe ser de su sede y de su área.
+      final enAlcance = await fila(tx, tipo == 'VALORACION'
+          ? 'SELECT 1 WHERE ${Alcance.sede('CAST(@sede:text AS uuid)')}'
+          : '''
         SELECT 1 FROM jsonb_to_recordset(CAST(@alcance:text AS jsonb)) a(sede uuid, area uuid)
         WHERE (a.sede IS NULL OR a.sede = CAST(@sede:text AS uuid)) AND (a.area IS NULL OR a.area = CAST(@area_p:text AS uuid))''',
           {...p, 'sede': sede['sede_id'], 'area_p': prog['area_id']});
@@ -203,8 +255,8 @@ class AgendaCoordinacion {
                 @cupo:int4, CAST(@u:text AS uuid))
         RETURNING id::text, programa_id::text''', q);
       final participante = await fila(tx, '''
-        INSERT INTO agenda.participantes (sesion_id, paciente_id, matricula_id, numero_sesion, creado_por)
-        VALUES (CAST(@ses:text AS uuid), CAST(@pac:text AS uuid), CAST(nullif(@mat:text, '') AS uuid),
+        INSERT INTO agenda.participantes (sesion_id, paciente_id, matricula_id, observacion, numero_sesion, creado_por)
+        VALUES (CAST(@ses:text AS uuid), CAST(@pac:text AS uuid), CAST(nullif(@mat:text, '') AS uuid), nullif(trim(@obs:text), ''),
                 (SELECT count(*) + 1 FROM agenda.participantes x
                  JOIN agenda.sesiones xs ON xs.id = x.sesion_id
                  WHERE x.paciente_id = CAST(@pac:text AS uuid)
@@ -223,7 +275,8 @@ class AgendaCoordinacion {
         UPDATE agenda.sesiones s SET estado = 'CANCELADA', motivo_cancelacion = @m:text, actualizado_por = CAST(@u:text AS uuid)
         FROM catalogo.programas pg
         WHERE s.id = CAST(@id:text AS uuid) AND s.estado = 'PROGRAMADA' AND pg.id = s.programa_id
-          AND ${Alcance.sedeYArea('s.sede_id', 'pg.area_id')}''', {...a.parametros, 'm': motivo, 'u': s.usuarioId, 'id': sesionId});
+          AND ((s.tipo = 'VALORACION' AND ${Alcance.sede('s.sede_id')}) OR (${Alcance.sedeYArea('s.sede_id', 'pg.area_id')}))''',
+          {...a.parametros, 'm': motivo, 'u': s.usuarioId, 'id': sesionId});
       if (r.affectedRows == 0) throw ErrorDatos(404, 'La sesión no existe, ya no está programada o no es de tu coordinación.');
       await consultar(tx, '''
         UPDATE agenda.participantes SET asistencia = 'CANCELADA'

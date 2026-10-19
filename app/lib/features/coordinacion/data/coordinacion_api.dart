@@ -47,6 +47,7 @@ class CoordinacionApi {
     required String inicio,
     required String tipo,
     String? matriculaId,
+    String? observacion,
   }) =>
       _cliente.post<Map<String, dynamic>>('$_base/sesiones', {
         'paciente_id': pacienteId,
@@ -54,7 +55,12 @@ class CoordinacionApi {
         'inicio': inicio,
         'tipo': tipo,
         'matricula_id': matriculaId,
+        'observacion': observacion,
       });
+
+  /// Nota de coordinación de una cita ("desde el 12 de octubre", "no mover"...).
+  Future<void> observacion(String participanteId, String texto) =>
+      _cliente.put<dynamic>('$_base/participantes/$participanteId', {'observacion': texto});
 
   Future<void> cancelarSesion(String sesionId, String motivo) =>
       _cliente.post<dynamic>('$_base/sesiones/$sesionId/cancelar', {'motivo': motivo});

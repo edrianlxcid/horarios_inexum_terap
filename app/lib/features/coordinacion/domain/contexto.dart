@@ -46,6 +46,10 @@ class ContextoCoordinacion {
       ? terapeutas
       : terapeutas.where((t) => (t.extra['areas'] as List).contains(areaId)).toList();
 
+  /// Quienes hacen valoraciones, de cualquier área: también se valora (como
+  /// excepción) a estudiantes de Estimulación temprana.
+  List<Opcion> get terapeutasQueValoran => terapeutas.where((t) => t.extra['valora'] == true).toList();
+
   List<Opcion> especialidadesDeArea(String? areaId) =>
       areaId == null ? especialidades : especialidades.where((e) => e.areaId == areaId).toList();
 

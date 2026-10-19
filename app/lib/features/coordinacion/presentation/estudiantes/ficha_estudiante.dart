@@ -272,7 +272,8 @@ class _Sesiones extends StatelessWidget {
               dense: true,
               contentPadding: EdgeInsets.zero,
               title: Text('${Formatos.fechaHora(s['inicio'] as String?)} · ${s['programa'] ?? Formatos.etiqueta(s['tipo'] as String?)}'),
-              subtitle: Text('${s['terapeuta']}${s['numero_sesion'] != null ? ' · sesión ${s['numero_sesion']}' : ''}'),
+              subtitle: Text('${s['terapeuta']}${s['numero_sesion'] != null ? ' · sesión ${s['numero_sesion']}' : ''}'
+                  '${s['observacion'] != null ? ' · Nota: ${s['observacion']}' : ''}'),
               trailing: s['asistencia'] == 'PENDIENTE'
                   ? null
                   : Etiqueta(Formatos.etiqueta(s['asistencia'] as String?), tono: tonoAsistencia(s['asistencia'] as String?)),

@@ -103,3 +103,9 @@ const motivosDemanda = [
   'Hiperactividad marcada; se recomienda grupo reducido.',
   'Buena adaptación; necesita solo adaptaciones puntuales.',
 ];
+
+/// Notas de coordinación en una cita (columna OBSERVACIÓN de los horarios).
+const observacionesCita = [
+  'Desde esta semana', 'Solo por hoy', 'No mover', 'Rotativo', 'Reagendado por la familia',
+  'Llega 10 minutos tarde', 'Recupera la sesión del lunes', 'Viene con la abuela',
+];

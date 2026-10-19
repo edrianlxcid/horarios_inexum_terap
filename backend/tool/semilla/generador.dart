@@ -17,7 +17,8 @@ import 'package:uuid/uuid.dart';
 import 'perfiles.dart';
 import 'textos.dart';
 
-typedef Franja = (int dia, int hora);
+/// Día de la semana y minuto del día en que empieza un turno.
+typedef Franja = (int dia, int minuto);
 
 /// Carga todas las empresas de [perfiles] en una sola transacción.
 /// Devuelve un resumen por empresa.
@@ -275,9 +276,13 @@ class GeneradorSemilla {
       final id = _id();
       _subAreas[codigo] = id;
       _subAreaArea[codigo] = v.$1;
-      filas.add({'id': id, 'area_id': _areas[v.$1], 'codigo': codigo, 'nombre': v.$2});
+      filas.add({
+        'id': id, 'area_id': _areas[v.$1], 'codigo': codigo, 'nombre': v.$2,
+        'minutos_turno': perfil.minutosTurno[codigo] ?? 60,
+      });
     });
-    await db.insertar('catalogo.sub_areas', filas, {'id': 'uuid', 'area_id': 'uuid', 'codigo': 'text', 'nombre': 'text'});
+    await db.insertar('catalogo.sub_areas', filas,
+        {'id': 'uuid', 'area_id': 'uuid', 'codigo': 'text', 'nombre': 'text', 'minutos_turno': 'smallint'});
 
     const tipos = {
       'VALORACION': ('Valoración', 'UNICO', true),
@@ -307,7 +312,7 @@ class GeneradorSemilla {
       filasProg.add({
         'id': prog.id, 'area_id': _areas[d.area], 'tipo_programa_id': _tipos[d.tipo],
         'sub_area_requerida_id': _subAreas[d.sub], 'codigo': d.codigo, 'nombre': d.nombre,
-        'total_sesiones': d.total, 'duracion_meses': d.meses, 'duracion_sesion_min': 60,
+        'total_sesiones': d.total, 'duracion_meses': d.meses, 'duracion_sesion_min': d.duracion,
         'sesiones_por_semana': d.porSemana, 'modalidad': d.modalidad, 'modalidad_entrega': d.entrega,
         'cupo_maximo': d.cupo, 'requiere_valoracion': d.requiereValoracion,
         'sesiones_antes_evaluacion': d.antesEvaluacion, 'precio_referencial': d.precio,
@@ -408,19 +413,22 @@ class GeneradorSemilla {
         final usuario = _nuevoUsuario(nombres, apellidos, perfil.dominio, hash);
         final area = _subAreaArea[subs.first]!;
         _asignarRol(usuario, 'TERAPEUTA', sedeId: sede.id, area: area);
+        // Jornada de mañana (08:00–17:00, almuerzo 13:00) o de tarde (10:00–19:00,
+        // almuerzo 14:00), una hora administrativa a la semana y, a veces, sábado.
         final manana = n.isEven;
-        final sabado = n % 3 == 0;
-        final horas = <int, List<int>>{};
-        for (var dia = 1; dia <= 5; dia++) {
-          horas[dia] = manana ? [8, 9, 10, 11, 12, 14, 15, 16] : [10, 11, 12, 13, 15, 16, 17, 18];
-        }
-        horas[3]!.remove(16);
-        horas[5]!.remove(18);
-        if (sabado) horas[6] = [8, 9, 10, 11, 12];
+        final jornadas = <int, (int, int)>{
+          for (var dia = 1; dia <= 5; dia++) dia: manana ? (8 * 60, 17 * 60) : (10 * 60, 19 * 60),
+          if (n % 3 == 0) 6: (8 * 60, 13 * 60),
+        };
+        final pausas = <(int, int, int, String)>[
+          for (var dia = 1; dia <= 5; dia++) manana ? (dia, 13 * 60, 14 * 60, 'ALMUERZO') : (dia, 14 * 60, 15 * 60, 'ALMUERZO'),
+          if (manana) (3, 16 * 60, 17 * 60, 'ADMINISTRATIVA') else (5, 18 * 60, 19 * 60, 'ADMINISTRATIVA'),
+        ];
+        final turno = perfil.minutosTurno[subs.first] ?? 60;
         final prof = _Prof(
           id: _id(), usuarioId: usuario, sede: sede, subAreas: subs, nombres: nombres, apellidos: apellidos,
-          profesion: profesiones[subs.first]!, color: colores[n % colores.length], manana: manana, horas: horas,
-          calidad: 3.4 + _r.nextDouble() * 1.5,
+          profesion: profesiones[subs.first]!, color: colores[n % colores.length], jornadas: jornadas, pausas: pausas,
+          turno: turno, horas: _turnos(jornadas, pausas, turno), calidad: 3.4 + _r.nextDouble() * 1.5,
         );
         _profs.add(prof);
         _ocupProf[prof.id] = {};
@@ -570,18 +578,19 @@ class GeneradorSemilla {
 
   void _agendarGrupos() {
     for (final c in _cohortes) {
+      final dur = c.prog.def.duracion;
       final fechas = _generarFechas(
         desde: c.inicio, patron: c.patron, cantidad: c.prog.def.total,
-        disponible: (t) => _profLibre(c.prof, t) && c.miembros.every((m) => _pacLibre(m.paciente, t)),
+        disponible: (t) => _profLibre(c.prof, t, dur) && c.miembros.every((m) => _pacLibre(m.paciente, t, dur)),
       );
       for (final t in fechas) {
         final sesion = _Sesion(_id(), c.sede, c.prof, c.prog, 'PROGRAMA', t, c.cupo)
           ..grupo = c
           ..salaId = c.salaId
           ..entrega = c.prog.def.entrega;
-        _ocupar(c.prof, t);
+        _ocupar(c.prof, t, dur);
         for (final m in c.miembros) {
-          _ocuparPac(m.paciente, t);
+          _ocuparPac(m.paciente, t, dur);
           final part = _Part(_id(), sesion, m.paciente, m, m.sesiones.length + 1);
           m.sesiones.add(part);
           sesion.participantes.add(part);
@@ -600,7 +609,7 @@ class GeneradorSemilla {
       for (final fase in tramos) {
         final sub = fase.sub ?? def.sub;
         final prof = _profMenosCargado(m.paciente.sede, sub, desde);
-        final patron = _elegirPatron(prof, m.paciente, desde, def.porSemana ?? 1);
+        final patron = _elegirPatron(prof, m.paciente, desde, def.porSemana ?? 1, def.duracion);
         m.patron ??= patron;
         final bloqueadas = <String>{};
         final congel = m.congelamiento;
@@ -611,14 +620,14 @@ class GeneradorSemilla {
         }
         final fechas = _generarFechas(
           desde: desde, patron: patron, cantidad: fase.sesiones, bloqueadas: bloqueadas,
-          disponible: (t) => _profLibre(prof, t) && _pacLibre(m.paciente, t),
+          disponible: (t) => _profLibre(prof, t, def.duracion) && _pacLibre(m.paciente, t, def.duracion),
         );
         for (final t in fechas) {
           final sesion = _Sesion(_id(), m.paciente.sede, prof, m.prog, 'PROGRAMA', t, 1)
             ..salaId = m.paciente.sede.salas['Consultorio ${_entre(1, 4)}']
             ..plan = m;
-          _ocupar(prof, t);
-          _ocuparPac(m.paciente, t);
+          _ocupar(prof, t, def.duracion);
+          _ocuparPac(m.paciente, t, def.duracion);
           final part = _Part(_id(), sesion, m.paciente, m, m.sesiones.length + 1)..faseId = fase.id.isEmpty ? null : fase.id;
           m.sesiones.add(part);
           sesion.participantes.add(part);
@@ -644,12 +653,13 @@ class GeneradorSemilla {
         final dia = desde.add(Duration(days: _r.nextInt(max(1, hasta.difference(desde).inDays))));
         final prof = evaluadores[_r.nextInt(evaluadores.length)];
         final horas = prof.horas[dia.weekday];
-        if (horas == null) continue;
-        final t = DateTime.utc(dia.year, dia.month, dia.day, horas[_r.nextInt(horas.length)]);
-        if (!_profLibre(prof, t) || !_pacLibre(p, t)) continue;
+        if (horas == null || horas.isEmpty) continue;
+        final t = _en(dia, horas[_r.nextInt(horas.length)]);
+        final dur = valoracion.def.duracion;
+        if (!_profLibre(prof, t, dur) || !_pacLibre(p, t, dur)) continue;
         final sesion = _Sesion(_id(), p.sede, prof, valoracion, 'VALORACION', t, 1)..salaId = p.sede.salas['Consultorio 1'];
-        _ocupar(prof, t);
-        _ocuparPac(p, t);
+        _ocupar(prof, t, dur);
+        _ocuparPac(p, t, dur);
         sesion.participantes.add(_Part(_id(), sesion, p, null, ++hechas));
         _sesiones.add(sesion);
       }
@@ -688,7 +698,8 @@ class GeneradorSemilla {
       final mats = p.matriculas.toList()..sort((a, b) => a.inicio.compareTo(b.inicio));
       final prefijo = perfil.prefijosContrato[mats.first.prog.def.area]!;
       final numero = _contadoresContrato[prefijo] = (_contadoresContrato[prefijo] ?? 3100 + 1000 * _contadoresContrato.length) + 1;
-      final codigo = '$prefijo-$numero';
+      // Como se escriben hoy en los contratos: "NESC 1234".
+      final codigo = '$prefijo $numero';
       final desde = mats.first.inicio;
       var hasta = desde;
       for (final m in mats) {
@@ -789,7 +800,9 @@ class GeneradorSemilla {
         {
           'id': m.id, 'contrato_id': m.contrato!.id, 'paciente_id': m.paciente.id, 'programa_id': m.prog.id,
           'fase_actual_id': m.prog.fases.isEmpty ? null : m.prog.fases.first.id,
-          'jornada_preferida': (m.sesiones.isNotEmpty && m.sesiones.first.sesion.inicio.hour < 13) ? 'MANANA' : 'TARDE',
+          'jornada_preferida': _r.nextDouble() < 0.06
+              ? 'ROTATIVO'
+              : (m.sesiones.isNotEmpty && m.sesiones.first.sesion.inicio.hour < 13) ? 'MANANA' : 'TARDE',
           'fecha_inicio': _f(m.inicio), 'fecha_fin_estimada': _f(m.finEstimado ?? m.inicio),
           'sesiones_contratadas': m.prog.def.total,
         },
@@ -809,25 +822,18 @@ class GeneradorSemilla {
     final jornadas = <Map<String, Object?>>[];
     final pausas = <Map<String, Object?>>[];
     final desde = _f(DateTime.utc(hoy.year - 1, 1, 1));
+    String hhmm(int m) => '${_2(m ~/ 60)}:${_2(m % 60)}';
     for (final p in _profs) {
-      for (final dia in p.horas.keys) {
-        final sabado = dia == 6;
-        jornadas.add({
-          'profesional_id': p.id, 'sede_id': p.sede.id, 'dia_semana': dia, 'vigente_desde': desde,
-          'hora_inicio': sabado ? '08:00' : p.manana ? '08:00' : '10:00',
-          'hora_fin': sabado ? '13:00' : p.manana ? '17:00' : '19:00',
+      p.jornadas.forEach((dia, j) => jornadas.add({
+            'profesional_id': p.id, 'sede_id': p.sede.id, 'dia_semana': dia, 'vigente_desde': desde,
+            'hora_inicio': hhmm(j.$1), 'hora_fin': hhmm(j.$2),
+          }));
+      for (final (dia, ini, fin, tipo) in p.pausas) {
+        pausas.add({
+          'profesional_id': p.id, 'dia_semana': dia, 'tipo': tipo, 'vigente_desde': desde,
+          'hora_inicio': hhmm(ini), 'hora_fin': hhmm(fin),
         });
-        if (!sabado) {
-          pausas.add({
-            'profesional_id': p.id, 'dia_semana': dia, 'tipo': 'ALMUERZO', 'vigente_desde': desde,
-            'hora_inicio': p.manana ? '13:00' : '14:00', 'hora_fin': p.manana ? '14:00' : '15:00',
-          });
-        }
       }
-      pausas.add({
-        'profesional_id': p.id, 'dia_semana': p.manana ? 3 : 5, 'tipo': 'ADMINISTRATIVA', 'vigente_desde': desde,
-        'hora_inicio': p.manana ? '16:00' : '18:00', 'hora_fin': p.manana ? '17:00' : '19:00',
-      });
     }
     await db.insertar('agenda.jornadas', jornadas, {
       'profesional_id': 'uuid', 'sede_id': 'uuid', 'dia_semana': 'smallint', 'vigente_desde': 'date',
@@ -870,7 +876,7 @@ class GeneradorSemilla {
       m.planId = _id();
       planes.add({
         'id': m.planId, 'matricula_id': m.id, 'grupo_id': m.cohorte?.id, 'fecha_inicio': _f(m.inicio),
-        'patron': [for (final (dia, hora) in patron) {'dia': dia, 'hora': '${_2(hora)}:00', 'profesional_id': profId}],
+        'patron': [for (final (dia, m) in patron) {'dia': dia, 'hora': '${_2(m ~/ 60)}:${_2(m % 60)}', 'profesional_id': profId}],
         'sesiones_a_generar': m.prog.def.total,
         'estado': m.sesiones.every((s) => s.sesion.inicio.isBefore(hoy)) ? 'FINALIZADO' : 'ACTIVO',
       });
@@ -886,7 +892,7 @@ class GeneradorSemilla {
         {
           'id': s.id, 'sede_id': s.sede.id, 'sala_id': s.salaId, 'profesional_id': s.prof.id, 'programa_id': s.prog?.id,
           'grupo_id': s.grupo?.id, 'plan_id': s.plan?.planId, 'tipo': s.tipo, 'modalidad_entrega': s.entrega,
-          'inicio': _ts(s.inicio), 'fin': _ts(s.inicio.add(const Duration(hours: 1))), 'cupo_maximo': s.cupo,
+          'inicio': _ts(s.inicio), 'fin': _ts(s.inicio.add(Duration(minutes: s.prog?.def.duracion ?? 60))), 'cupo_maximo': s.cupo,
           'estado': s.estado, 'motivo_cancelacion': s.motivo,
         },
     ], {
@@ -905,12 +911,14 @@ class GeneradorSemilla {
           'numero_sesion': p.numero, 'fase_id': p.faseId ?? _faseDe(p), 'asistencia': p.asistencia,
           'marcado_por': marcada ? s.prof.usuarioId : null,
           'marcado_en': marcada ? _ts(s.inicio.add(const Duration(minutes: 65))) : null,
+          // Notas de coordinación en algunas citas próximas, como en los horarios actuales.
+          'observacion': p.asistencia == 'PENDIENTE' && _r.nextDouble() < 0.07 ? _elegir(observacionesCita) : null,
         });
       }
     }
     await db.insertar('agenda.participantes', participantes, {
       'id': 'uuid', 'sesion_id': 'uuid', 'paciente_id': 'uuid', 'matricula_id': 'uuid', 'numero_sesion': 'smallint',
-      'fase_id': 'uuid', 'asistencia': 'text', 'marcado_por': 'uuid', 'marcado_en': 'timestamptz',
+      'fase_id': 'uuid', 'asistencia': 'text', 'marcado_por': 'uuid', 'marcado_en': 'timestamptz', 'observacion': 'text',
     });
     resumen['participaciones en sesiones'] = participantes.length;
   }
@@ -1224,7 +1232,7 @@ class GeneradorSemilla {
         final programada = s.inicio.subtract(const Duration(days: 1));
         avisos.add({
           'usuario_id': part.paciente.reps.first.usuarioId, 'canal': 'PUSH', 'tipo': 'RECORDATORIO_SESION',
-          'titulo': 'Sesión de mañana', 'cuerpo': '${part.paciente.nombres.split(' ').first} tiene sesión a las ${_2(s.inicio.hour)}:00.',
+          'titulo': 'Sesión de mañana', 'cuerpo': '${part.paciente.nombres.split(' ').first} tiene sesión a las ${_2(s.inicio.hour)}:${_2(s.inicio.minute)}.',
           'datos': {'sesion_id': s.id}, 'programada_para': _ts(programada),
           'enviada_en': programada.isBefore(hoy) ? _ts(programada) : null,
           'leida_en': programada.isBefore(hoy) && _r.nextBool() ? _ts(programada.add(const Duration(hours: 2))) : null,
@@ -1251,23 +1259,52 @@ class GeneradorSemilla {
   }
 
   // ---------------------------------------------------------------------------
-  // Disponibilidad
+  // Disponibilidad. La ocupación se lleva en bloques de 15 minutos, así se
+  // detectan choques entre turnos de 45 (lenguaje) y de 60 minutos (Neuro).
   // ---------------------------------------------------------------------------
-  static int _k(DateTime t) => t.millisecondsSinceEpoch ~/ 3600000;
+  static int _k(DateTime t) => t.millisecondsSinceEpoch ~/ 900000;
+  static Iterable<int> _bloques(DateTime t, int minutos) sync* {
+    for (var i = 0; i < (minutos + 14) ~/ 15; i++) {
+      yield _k(t) + i;
+    }
+  }
 
-  bool _profLibre(_Prof p, DateTime t) {
+  /// Turnos de cada día: la jornada dividida cada [turno] minutos; si un turno
+  /// choca con una pausa, se vuelve a contar desde el final de la pausa
+  /// (igual que la API en /coordinacion/disponibilidad).
+  static Map<int, List<int>> _turnos(Map<int, (int, int)> jornadas, List<(int, int, int, String)> pausas, int turno) {
+    final turnos = <int, List<int>>{};
+    jornadas.forEach((dia, jornada) {
+      final (inicio, fin) = jornada;
+      final lista = <int>[];
+      var m = inicio;
+      while (m + turno <= fin) {
+        final pausa = pausas.where((p) => p.$1 == dia && m < p.$3 && m + turno > p.$2).firstOrNull;
+        if (pausa != null) {
+          m = pausa.$3;
+          continue;
+        }
+        lista.add(m);
+        m += turno;
+      }
+      turnos[dia] = lista;
+    });
+    return turnos;
+  }
+
+  bool _profLibre(_Prof p, DateTime t, int minutos) {
     final horas = p.horas[t.weekday];
-    if (horas == null || !horas.contains(t.hour)) return false;
+    if (horas == null || !horas.contains(t.hour * 60 + t.minute)) return false;
     if (_feriados.contains(_f(t))) return false;
     for (final (ini, fin, _) in p.ausencias) {
       if (!t.isBefore(ini) && t.isBefore(fin)) return false;
     }
-    return !_ocupProf[p.id]!.contains(_k(t));
+    return !_bloques(t, minutos).any(_ocupProf[p.id]!.contains);
   }
 
-  bool _pacLibre(_Paciente p, DateTime t) => !_ocupPac[p.id]!.contains(_k(t));
-  void _ocupar(_Prof p, DateTime t) => _ocupProf[p.id]!.add(_k(t));
-  void _ocuparPac(_Paciente p, DateTime t) => _ocupPac[p.id]!.add(_k(t));
+  bool _pacLibre(_Paciente p, DateTime t, int minutos) => !_bloques(t, minutos).any(_ocupPac[p.id]!.contains);
+  void _ocupar(_Prof p, DateTime t, int minutos) => _ocupProf[p.id]!.addAll(_bloques(t, minutos));
+  void _ocuparPac(_Paciente p, DateTime t, int minutos) => _ocupPac[p.id]!.addAll(_bloques(t, minutos));
 
   List<DateTime> _generarFechas({
     required DateTime desde,
@@ -1279,9 +1316,9 @@ class GeneradorSemilla {
     final fechas = <DateTime>[];
     var d = desde;
     for (var i = 0; i < 400 && fechas.length < cantidad; i++) {
-      for (final (dia, hora) in patron) {
+      for (final (dia, minuto) in patron) {
         if (d.weekday != dia || bloqueadas.contains(_f(d))) continue;
-        final t = DateTime.utc(d.year, d.month, d.day, hora);
+        final t = _en(d, minuto);
         if (disponible(t)) {
           fechas.add(t);
           break;
@@ -1294,12 +1331,16 @@ class GeneradorSemilla {
 
   _Prof _profMenosCargado(_Sede sede, String sub, DateTime desde) {
     final candidatos = _profs.where((p) => p.sede == sede && p.subAreas.contains(sub)).toList()..shuffle(_r);
-    final ventana = {for (var i = 0; i < 28 * 24; i++) _k(desde) + i};
-    candidatos.sort((a, b) => _ocupProf[a.id]!.where(ventana.contains).length.compareTo(_ocupProf[b.id]!.where(ventana.contains).length));
+    final (k0, k1) = (_k(desde), _k(desde) + 28 * 96);
+    int carga(_Prof p) => _ocupProf[p.id]!.where((b) => b >= k0 && b < k1).length;
+    candidatos.sort((a, b) => carga(a).compareTo(carga(b)));
     return candidatos.first;
   }
 
-  List<Franja> _elegirPatron(_Prof prof, _Paciente pac, DateTime desde, int porSemana) {
+  /// [d] a las [minuto] (minutos desde medianoche).
+  static DateTime _en(DateTime d, int minuto) => DateTime.utc(d.year, d.month, d.day, minuto ~/ 60, minuto % 60);
+
+  List<Franja> _elegirPatron(_Prof prof, _Paciente pac, DateTime desde, int porSemana, int duracion) {
     final dias = prof.horas.keys.where((d) => d <= 5).toList();
     List<Franja>? mejor;
     var menorConflicto = 1 << 30;
@@ -1315,8 +1356,8 @@ class GeneradorSemilla {
         final d = desde.add(Duration(days: i));
         for (final (dia, h) in patron) {
           if (d.weekday != dia) continue;
-          final t = DateTime.utc(d.year, d.month, d.day, h);
-          if (!_profLibre(prof, t) || !_pacLibre(pac, t)) conflictos++;
+          final t = _en(d, h);
+          if (!_profLibre(prof, t, duracion) || !_pacLibre(pac, t, duracion)) conflictos++;
         }
       }
       if (conflictos < menorConflicto) {
@@ -1458,13 +1499,21 @@ class _Fase {
 class _Prof {
   _Prof({
     required this.id, required this.usuarioId, required this.sede, required this.subAreas, required this.nombres,
-    required this.apellidos, required this.profesion, required this.color, required this.manana, required this.horas,
-    required this.calidad,
+    required this.apellidos, required this.profesion, required this.color, required this.jornadas, required this.pausas,
+    required this.turno, required this.horas, required this.calidad,
   });
   final String id, usuarioId, nombres, apellidos, profesion, color;
   final _Sede sede;
   final List<String> subAreas;
-  final bool manana;
+
+  /// Por día: (inicio, fin) en minutos desde medianoche.
+  final Map<int, (int, int)> jornadas;
+
+  /// (día, inicio, fin, tipo) en minutos.
+  final List<(int, int, int, String)> pausas;
+  final int turno;
+
+  /// Por día: minuto de inicio de cada turno.
   final Map<int, List<int>> horas;
   final double calidad;
   final ausencias = <(DateTime, DateTime, String)>[];
