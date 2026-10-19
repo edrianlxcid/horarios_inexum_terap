@@ -190,6 +190,57 @@ SELECT pg_temp.debe_fallar('Grupo con cupo mayor que el del programa',
   $q$INSERT INTO agenda.grupos (codigo, programa_id, sede_id, profesional_id, cupo_maximo)
      VALUES ('G-9901', '00000000-0000-0000-0000-0000000000b5', '00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000c1', 6)$q$);
 
+-- Recorrido del paciente: valoración con sesiones previstas por especialidad.
+INSERT INTO catalogo.tipos_programa (id, codigo, nombre, patron, es_valoracion) VALUES
+  ('00000000-0000-0000-0000-0000000000b6', 'PRUEBA_VALORACION', 'Valoración de prueba', 'UNICO', true);
+INSERT INTO catalogo.programas (id, area_id, tipo_programa_id, sub_area_requerida_id, codigo, nombre,
+                                total_sesiones, modalidad, cupo_maximo, sesiones_antes_evaluacion, valoracion)
+VALUES ('00000000-0000-0000-0000-0000000000b7', '00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000b6',
+        '00000000-0000-0000-0000-0000000000b2', 'PRUEBA_VAL', 'Valoración inicial de prueba', 20, 'INDIVIDUAL', 1, 0, 'INICIAL');
+INSERT INTO catalogo.programa_especialidades (programa_id, sub_area_id) VALUES
+  ('00000000-0000-0000-0000-0000000000b7', '00000000-0000-0000-0000-0000000000b3');
+INSERT INTO agenda.procesos_valoracion (id, paciente_id, tipo) VALUES
+  ('00000000-0000-0000-0000-000000000501', '00000000-0000-0000-0000-0000000000e3', 'INICIAL');
+INSERT INTO agenda.proceso_especialidades (proceso_id, sub_area_id, sesiones) VALUES
+  ('00000000-0000-0000-0000-000000000501', '00000000-0000-0000-0000-0000000000b2', 1),
+  ('00000000-0000-0000-0000-000000000501', '00000000-0000-0000-0000-0000000000b3', 1);
+INSERT INTO agenda.sesiones (id, sede_id, profesional_id, programa_id, tipo, inicio, fin) VALUES
+  ('00000000-0000-0000-0000-000000000511', '00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000c1',
+   '00000000-0000-0000-0000-0000000000b7', 'VALORACION', '2030-01-09 09:00', '2030-01-09 09:45'),
+  ('00000000-0000-0000-0000-000000000512', '00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000c1',
+   '00000000-0000-0000-0000-0000000000b7', 'VALORACION', '2030-01-09 10:00', '2030-01-09 10:45'),
+  ('00000000-0000-0000-0000-000000000513', '00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000c2',
+   '00000000-0000-0000-0000-0000000000b7', 'VALORACION', '2030-01-09 11:00', '2030-01-09 11:45');
+
+SELECT pg_temp.debe_fallar('Valoración con más de 20 sesiones previstas',
+  $q$UPDATE agenda.proceso_especialidades SET sesiones = 20
+     WHERE proceso_id = '00000000-0000-0000-0000-000000000501' AND sub_area_id = '00000000-0000-0000-0000-0000000000b2'$q$);
+SELECT pg_temp.debe_funcionar('Sesión de valoración de una especialidad prevista',
+  $q$INSERT INTO agenda.participantes (sesion_id, paciente_id, proceso_valoracion_id, valoracion_especialidad_id)
+     VALUES ('00000000-0000-0000-0000-000000000511', '00000000-0000-0000-0000-0000000000e3',
+             '00000000-0000-0000-0000-000000000501', '00000000-0000-0000-0000-0000000000b2')$q$);
+SELECT pg_temp.debe_fallar('Más sesiones de valoración que las previstas',
+  $q$INSERT INTO agenda.participantes (sesion_id, paciente_id, proceso_valoracion_id, valoracion_especialidad_id)
+     VALUES ('00000000-0000-0000-0000-000000000512', '00000000-0000-0000-0000-0000000000e3',
+             '00000000-0000-0000-0000-000000000501', '00000000-0000-0000-0000-0000000000b2')$q$);
+-- La sesión 512 es de Ana, que no tiene la otra especialidad.
+SELECT pg_temp.debe_fallar('Valoración con un profesional de otra especialidad',
+  $q$INSERT INTO agenda.participantes (sesion_id, paciente_id, proceso_valoracion_id, valoracion_especialidad_id)
+     VALUES ('00000000-0000-0000-0000-000000000512', '00000000-0000-0000-0000-0000000000e3',
+             '00000000-0000-0000-0000-000000000501', '00000000-0000-0000-0000-0000000000b3')$q$);
+INSERT INTO resultados
+SELECT 'Etapa durante la valoración', agenda.etapa_paciente('00000000-0000-0000-0000-0000000000e3') = 'VALORACION_INICIAL',
+       agenda.etapa_paciente('00000000-0000-0000-0000-0000000000e3');
+UPDATE agenda.procesos_valoracion SET estado = 'COMPLETADA', resultado = 'INGRESA_A_PROGRAMA', cerrado_en = now()
+WHERE id = '00000000-0000-0000-0000-000000000501';
+SELECT pg_temp.debe_fallar('Valoración cerrada no admite más sesiones',
+  $q$INSERT INTO agenda.participantes (sesion_id, paciente_id, proceso_valoracion_id, valoracion_especialidad_id)
+     VALUES ('00000000-0000-0000-0000-000000000513', '00000000-0000-0000-0000-0000000000e3',
+             '00000000-0000-0000-0000-000000000501', '00000000-0000-0000-0000-0000000000b3')$q$);
+INSERT INTO resultados
+SELECT 'Etapa al cerrar la valoración (ya tiene programa)', agenda.etapa_paciente('00000000-0000-0000-0000-0000000000e3') = 'EN_PROGRAMA',
+       agenda.etapa_paciente('00000000-0000-0000-0000-0000000000e3');
+
 -- Auditoría activa: un alta normal debe funcionar y quedar en la bitácora.
 SET LOCAL app.omitir_auditoria = 'off';
 SELECT pg_temp.debe_funcionar('Alta con auditoría activa',

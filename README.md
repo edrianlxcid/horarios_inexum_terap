@@ -113,6 +113,28 @@ En la base y en la API se llaman *pacientes*; en la pantalla de Coordinación, *
 Cada parte del backend vive en su propio servicio (`backend/lib/modules/coordinacion/`) y todas
 filtran con el mismo alcance (`alcance.dart`): las sedes y áreas que coordina el usuario.
 
+### Recorrido del paciente (migración 170)
+
+```
+Registro → Valoración inicial → Programa (terapias) → Valoración final → Alta
+           1 a 20 sesiones                             1 a 20 sesiones
+```
+
+- **Valoraciones** (`agenda.procesos_valoracion`): Coordinación abre la inicial o la final con sus
+  sesiones previstas por especialidad (terapia ocupacional, psicología, lenguaje…; parámetro
+  `valoracion.sesiones_maximas` = 20), las ajusta y las cierra con su resultado
+  (inicial: ingresa a un programa / no requiere; final: alta / continúa / derivado).
+- Cada sesión de valoración pertenece a su proceso y a una especialidad prevista: la base no deja
+  agendar más de lo previsto, con un profesional de otra especialidad ni en una valoración cerrada.
+- El programa empieza cuando se cierra la valoración inicial (si el programa la pide).
+- La **etapa** se calcula (`agenda.etapa_paciente`): por valorar, en valoración inicial, listo para
+  su programa, en programa, toca valoración final, en valoración final, finalizado o retirado.
+- **Línea de tiempo**: todas las sesiones del paciente con su etapa, número ("sesión 3 de 24"),
+  terapeuta, asistencia y lo trabajado (resumen de la nota). La ven Coordinación en la ficha del
+  estudiante y el terapeuta en la ficha del paciente; el terapeuta abre desde ahí la nota de sus sesiones.
+- `catalogo.programa_especialidades`: especialidades que, además de la requerida, pueden atender un
+  programa (así las valoraciones las hacen varias especialidades).
+
 **Para probar:** en la pantalla de inicio, el *acceso rápido de desarrollo* lista usuarios de
 prueba de cada empresa y rol (solo existe con `APP_ENV=development` y desde la misma PC).
 

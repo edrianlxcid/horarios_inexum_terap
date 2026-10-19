@@ -4,6 +4,8 @@ import '../../../../core/dependencias.dart';
 import '../../../../core/util/formatos.dart';
 import '../../../../core/widgets/comunes.dart';
 import '../../domain/modelos.dart';
+import '../../../recorrido/domain/recorrido.dart';
+import '../../../recorrido/presentation/linea_de_tiempo.dart';
 import '../coordinacion_comun.dart';
 import 'nuevo_estudiante.dart';
 
@@ -81,6 +83,12 @@ class _VistaEstudiantesState extends State<VistaEstudiantes> {
                 valor: _filtro.sede,
                 opciones: [for (final s in ctx.sedes) (s.id, s.nombre)],
                 alCambiar: (v) => setState(() => _filtro = _filtro.con(sede: () => v)),
+              ),
+              FiltroLista<String>(
+                todos: 'Todas las etapas',
+                valor: _filtro.etapa,
+                opciones: [for (final e in nombresEtapas.entries) (e.key, e.value)],
+                alCambiar: (v) => setState(() => _filtro = _filtro.con(etapa: () => v)),
               ),
               FiltroLista<String>(
                 todos: 'Todos los estados',
@@ -165,7 +173,7 @@ class _ListaEstudiantes extends StatelessWidget {
                   e.contrato?.codigo ?? 'sin contrato',
                   if (programa != null) '${programa.programa} ${programa.realizadas}/${programa.contratadas}',
                 ].join(' · ')),
-                trailing: Etiqueta(Formatos.etiqueta(e.estado), tono: tonoEstadoEstudiante(e.estado)),
+                trailing: EtiquetaEtapa(e.etapa),
                 onTap: () => abrirEstudiante(context, e.id),
               );
             },
@@ -179,6 +187,7 @@ class _ListaEstudiantes extends StatelessWidget {
             dataRowMaxHeight: 64,
             columns: const [
               DataColumn(label: Text('Estudiante')),
+              DataColumn(label: Text('Etapa')),
               DataColumn(label: Text('Edad')),
               DataColumn(label: Text('Contrato')),
               DataColumn(label: Text('Programa y avance')),
@@ -196,6 +205,7 @@ class _ListaEstudiantes extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [Text(e.nombreCompleto), Text('${e.historia} · ${e.sede}', style: gris)],
                     )),
+                    DataCell(EtiquetaEtapa(e.etapa)),
                     DataCell(Text(Formatos.edad(e.edadMeses))),
                     DataCell(e.contrato == null
                         ? Text('Sin contrato', style: gris)

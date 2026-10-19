@@ -2,32 +2,33 @@ import 'contexto.dart';
 
 /// Filtros del listado de estudiantes. Los nulos significan "todos".
 class FiltroEstudiantes {
-  const FiltroEstudiantes({this.q = '', this.sede, this.estado, this.profesional, this.programa, this.pagina = 1});
+  const FiltroEstudiantes({this.q = '', this.sede, this.estado, this.etapa, this.profesional, this.programa, this.pagina = 1});
 
   final String q;
-  final String? sede, estado, profesional, programa;
+  final String? sede, estado, etapa, profesional, programa;
   final int pagina;
 
   static const estados = ['PROSPECTO', 'ACTIVO', 'CONGELADO', 'GRADUADO', 'RETIRADO'];
 
-  bool get vacio => q.isEmpty && sede == null && estado == null && profesional == null && programa == null;
+  bool get vacio => q.isEmpty && sede == null && estado == null && etapa == null && profesional == null && programa == null;
 
   /// Cambia un filtro y vuelve a la primera página.
-  FiltroEstudiantes con({String? q, String? Function()? sede, String? Function()? estado,
+  FiltroEstudiantes con({String? q, String? Function()? sede, String? Function()? estado, String? Function()? etapa,
       String? Function()? profesional, String? Function()? programa}) =>
       FiltroEstudiantes(
         q: q ?? this.q,
         sede: sede == null ? this.sede : sede(),
         estado: estado == null ? this.estado : estado(),
+        etapa: etapa == null ? this.etapa : etapa(),
         profesional: profesional == null ? this.profesional : profesional(),
         programa: programa == null ? this.programa : programa(),
       );
 
   FiltroEstudiantes enPagina(int pagina) =>
-      FiltroEstudiantes(q: q, sede: sede, estado: estado, profesional: profesional, programa: programa, pagina: pagina);
+      FiltroEstudiantes(q: q, sede: sede, estado: estado, etapa: etapa, profesional: profesional, programa: programa, pagina: pagina);
 
   Map<String, Object?> get consulta =>
-      {'q': q, 'sede': sede, 'estado': estado, 'profesional': profesional, 'programa': programa, 'pagina': pagina};
+      {'q': q, 'sede': sede, 'estado': estado, 'etapa': etapa, 'profesional': profesional, 'programa': programa, 'pagina': pagina};
 
   @override
   String toString() => consulta.toString();
@@ -54,6 +55,7 @@ class EstudianteFila {
     required this.nombres,
     required this.apellidos,
     required this.estado,
+    required this.etapa,
     required this.sede,
     required this.contratos,
     required this.programas,
@@ -73,6 +75,7 @@ class EstudianteFila {
       nombres: j['nombres'] as String,
       apellidos: j['apellidos'] as String,
       estado: j['estado'] as String,
+      etapa: j['etapa'] as String,
       sede: j['sede'] as String,
       edadMeses: j['edad_meses'] as int?,
       demanda: j['demanda'] as String?,
@@ -94,6 +97,9 @@ class EstudianteFila {
   }
 
   final String id, historia, nombres, apellidos, estado, sede;
+
+  /// Etapa del recorrido (POR_VALORAR, VALORACION_INICIAL, EN_PROGRAMA…).
+  final String etapa;
   final int? edadMeses;
   final String? demanda, representante, telefono, terapeutas, proximaSesion;
   final List<ContratoResumen> contratos;

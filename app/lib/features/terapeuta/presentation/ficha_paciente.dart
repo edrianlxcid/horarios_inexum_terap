@@ -3,8 +3,12 @@ import 'package:flutter/material.dart';
 import '../../../core/dependencias.dart';
 import '../../../core/util/formatos.dart';
 import '../../../core/widgets/comunes.dart';
+import '../../recorrido/domain/recorrido.dart';
+import '../../recorrido/presentation/linea_de_tiempo.dart';
+import 'nota_dialogo.dart';
 
-/// Ficha del paciente para el terapeuta: datos, programas, objetivos, notas y tareas.
+/// Ficha del paciente para el terapeuta: datos, etapa del recorrido, programas,
+/// objetivos, tareas y la línea de tiempo de todas sus sesiones.
 Future<void> mostrarFichaPaciente(BuildContext context, String pacienteId) {
   return showDialog<void>(
     context: context,
@@ -36,7 +40,13 @@ class _Ficha extends StatelessWidget {
               title: Text('${p['nombres']} ${p['apellidos']}'),
               subtitle: Text([p['codigo_historia'], Formatos.edad(p['edad_meses'] as int?), p['sede'],
                 if (p['demanda'] != null) 'demanda ${p['demanda']}'].join(' · ')),
-              trailing: IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  EtiquetaEtapa(p['etapa'] as String?),
+                  IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
+                ],
+              ),
             ),
             Expanded(
               child: ListView(
@@ -77,20 +87,17 @@ class _Ficha extends StatelessWidget {
                       title: Text(t['titulo'] as String),
                       subtitle: Text([t['descripcion'] ?? '', if (t['comentario_familia'] != null) 'Familia: ${t['comentario_familia']}'].join('\n')),
                     ),
-                  const TituloSeccion('Últimas notas'),
-                  for (final n in lista('notas'))
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('${Formatos.fechaCorta(n['fecha'] as String?)} · ${n['programa'] ?? ''} · ${n['terapeuta']}'
-                              '${n['firmada'] == true ? '' : ' · borrador'}',
-                              style: Theme.of(context).textTheme.labelMedium),
-                          Text(n['contenido'] as String? ?? ''),
-                        ],
-                      ),
-                    ),
+                  const TituloSeccion('Línea de tiempo'),
+                  Text('Toca una sesión tuya en la que asistió para ver o escribir su nota.',
+                      style: Theme.of(context).textTheme.bodySmall),
+                  const SizedBox(height: 8),
+                  LineaDeTiempo(
+                    sesiones: [for (final s in lista('linea_tiempo')) SesionLinea.fromJson(s)],
+                    alTocar: (s) async {
+                      if (s.profesionalId != p['profesional_id'] || s.asistencia != 'ASISTIO') return;
+                      if (await mostrarNotaDialogo(context, s.participanteId) == true) recargar();
+                    },
+                  ),
                 ],
               ),
             ),

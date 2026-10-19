@@ -47,6 +47,8 @@ class CoordinacionApi {
     required String inicio,
     required String tipo,
     String? matriculaId,
+    String? procesoId,
+    String? especialidadId,
     String? observacion,
   }) =>
       _cliente.post<Map<String, dynamic>>('$_base/sesiones', {
@@ -55,8 +57,34 @@ class CoordinacionApi {
         'inicio': inicio,
         'tipo': tipo,
         'matricula_id': matriculaId,
+        'proceso_id': procesoId,
+        'especialidad_id': especialidadId,
         'observacion': observacion,
       });
+
+  // ---------------------------------------------------------------------------
+  // Recorrido: valoración inicial y final
+  // ---------------------------------------------------------------------------
+  /// [plan]: {sub_area_id: sesiones}. Devuelve el id de la valoración.
+  Future<String> abrirValoracion(String pacienteId, String tipo, Map<String, int> plan) async =>
+      (await _cliente.post<Map<String, dynamic>>('$_base/valoraciones', {
+        'paciente_id': pacienteId,
+        'tipo': tipo,
+        'especialidades': [for (final e in plan.entries) {'sub_area_id': e.key, 'sesiones': e.value}],
+      }))['id'] as String;
+
+  Future<void> ajustarValoracion(String id, Map<String, int> plan) => _cliente.put<dynamic>('$_base/valoraciones/$id', {
+        'especialidades': [for (final e in plan.entries) {'sub_area_id': e.key, 'sesiones': e.value}],
+      });
+
+  Future<void> cerrarValoracion(String id, {required String resultado, String? conclusion, String? programaRecomendadoId}) =>
+      _cliente.post<dynamic>('$_base/valoraciones/$id/cerrar', {
+        'resultado': resultado,
+        'conclusion': conclusion,
+        'programa_recomendado_id': programaRecomendadoId,
+      });
+
+  Future<void> cancelarValoracion(String id) => _cliente.delete<dynamic>('$_base/valoraciones/$id');
 
   /// Nota de coordinación de una cita ("desde el 12 de octubre", "no mover"...).
   Future<void> observacion(String participanteId, String texto) =>

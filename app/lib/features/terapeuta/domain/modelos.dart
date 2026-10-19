@@ -48,6 +48,9 @@ class ParticipanteSesion {
     this.totalSesiones,
     this.fase,
     this.demanda,
+    this.valoracion,
+    this.especialidad,
+    this.trabajado,
   });
 
   factory ParticipanteSesion.fromJson(Map<String, dynamic> j) => ParticipanteSesion(
@@ -61,6 +64,9 @@ class ParticipanteSesion {
         totalSesiones: j['total_sesiones'] as int?,
         fase: j['fase'] as String?,
         demanda: j['demanda'] as String?,
+        valoracion: j['valoracion'] as String?,
+        especialidad: j['especialidad'] as String?,
+        trabajado: j['trabajado'] as String?,
       );
 
   final String participanteId, pacienteId, paciente, asistencia;
@@ -69,6 +75,12 @@ class ParticipanteSesion {
   final String nota;
   final int? edadMeses, numeroSesion, totalSesiones;
   final String? fase, demanda;
+
+  /// Sesión de valoración: INICIAL o FINAL, y la especialidad que valora.
+  final String? valoracion, especialidad;
+
+  /// Lo que se trabajó (resumen de la nota).
+  final String? trabajado;
 }
 
 class AgendaTerapeuta {

@@ -1,6 +1,7 @@
 import 'package:backend/core/auth/sesion.dart';
 import 'package:backend/core/db/base_datos.dart';
 import 'package:backend/modules/herramienta_datos/modelos.dart';
+import 'package:backend/modules/recorrido/recorrido.dart';
 import 'package:postgres/postgres.dart';
 
 /// Portal del terapeuta: solo ve sus sesiones y a sus pacientes.
@@ -37,14 +38,21 @@ class TerapeutaServicio {
                             'paciente', pa.nombres || ' ' || pa.apellidos,
                             'edad_meses', (extract(year FROM age(pa.fecha_nacimiento)) * 12
                                           + extract(month FROM age(pa.fecha_nacimiento)))::int,
-                            'numero_sesion', p.numero_sesion, 'total_sesiones', m.sesiones_contratadas,
+                            'numero_sesion', p.numero_sesion,
+                            'total_sesiones', coalesce(m.sesiones_contratadas,
+                                (SELECT sum(pe.sesiones) FROM agenda.proceso_especialidades pe
+                                 WHERE pe.proceso_id = p.proceso_valoracion_id))::int,
+                            'valoracion', pv.tipo, 'especialidad', esp.nombre,
                             'fase', f.nombre, 'asistencia', p.asistencia, 'demanda', nd.nombre,
+                            'trabajado', n.resumen_familia,
                             'nota', CASE WHEN n.id IS NULL THEN 'SIN_NOTA'
                                          WHEN n.firmada_en IS NULL THEN 'BORRADOR' ELSE 'FIRMADA' END)
                           ORDER BY pa.nombres)
                    FROM agenda.participantes p
                    JOIN personas.pacientes pa ON pa.id = p.paciente_id
                    LEFT JOIN matriculas.matriculas m ON m.id = p.matricula_id
+                   LEFT JOIN agenda.procesos_valoracion pv ON pv.id = p.proceso_valoracion_id
+                   LEFT JOIN catalogo.sub_areas esp ON esp.id = p.valoracion_especialidad_id
                    LEFT JOIN catalogo.programa_fases f ON f.id = p.fase_id
                    LEFT JOIN personas.clasificaciones_demanda cd ON cd.paciente_id = pa.id AND cd.vigente
                    LEFT JOIN personas.niveles_demanda nd ON nd.id = cd.nivel_id
@@ -194,16 +202,11 @@ class TerapeutaServicio {
             FROM clinico.objetivos o JOIN matriculas.matriculas m ON m.id = o.matricula_id
             JOIN catalogo.programas pg ON pg.id = m.programa_id
             WHERE m.paciente_id = CAST(@id:text AS uuid) ORDER BY o.estado, o.fecha_inicio''', id),
-          'notas': await filas(tx, '''
-            SELECT to_char(s.inicio AT TIME ZONE 'America/Guayaquil', 'YYYY-MM-DD') AS fecha, pg.nombre AS programa,
-                   pr.nombres || ' ' || pr.apellidos AS terapeuta, n.resumen_familia,
-                   comun.descifrar(n.contenido, @llave:text) AS contenido, n.firmada_en IS NOT NULL AS firmada
-            FROM clinico.notas_sesion n
-            JOIN agenda.participantes p ON p.id = n.participante_id
-            JOIN agenda.sesiones s ON s.id = p.sesion_id
-            JOIN personas.profesionales pr ON pr.id = n.profesional_id
-            LEFT JOIN catalogo.programas pg ON pg.id = s.programa_id
-            WHERE p.paciente_id = CAST(@id:text AS uuid) ORDER BY s.inicio DESC LIMIT 10''', id),
+          // Recorrido: etapa y todas sus sesiones (con quién, si asistió y qué se
+          // trabajó). Las propias se pueden abrir para ver o escribir la nota.
+          'etapa': await Recorrido.etapa(tx, pacienteId),
+          'profesional_id': prof,
+          'linea_tiempo': await Recorrido.lineaDeTiempo(tx, pacienteId),
           'tareas': await filas(tx, '''
             SELECT t.id::text, t.titulo, t.descripcion, to_char(t.fecha_limite, 'YYYY-MM-DD') AS fecha_limite,
                    t.completada_en IS NOT NULL AS completada, t.comentario_familia

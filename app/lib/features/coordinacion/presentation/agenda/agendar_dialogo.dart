@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import '../../../../core/dependencias.dart';
 import '../../../../core/util/formatos.dart';
 import '../../../../core/widgets/comunes.dart';
+import '../../../recorrido/domain/recorrido.dart';
 import '../../domain/modelos.dart';
 
-/// Agenda a un estudiante: elige estudiante, valoración o matrícula, terapeuta,
-/// día y una hora libre (o un grupo con cupo). Las reglas las valida la base.
+/// Agenda a un estudiante: elige estudiante, su valoración en curso (y la
+/// especialidad que valora) o una matrícula, terapeuta, día y un turno libre
+/// (o un grupo con cupo). Las reglas las valida la base.
 /// Desde el horario semanal llega con el terapeuta, el día y la hora ya elegidos.
 Future<bool?> mostrarAgendar(
   BuildContext context, {
@@ -65,6 +67,9 @@ class _AgendarState extends State<_Agendar> {
   String? _pacienteNombre;
   List<Map<String, dynamic>> _matriculas = const [];
   String _destino = 'VALORACION'; // 'VALORACION' o el id de una matrícula
+  /// Valoración en curso del estudiante (la final antes que la inicial) y la especialidad elegida.
+  ValoracionProceso? _valoracion;
+  String? _especialidad;
   late String? _terapeuta = widget.profesionalId;
   late DateTime _dia = widget.dia;
   late String? _hora = widget.hora;
@@ -88,6 +93,8 @@ class _AgendarState extends State<_Agendar> {
       _pacienteId = id;
       _pacienteNombre = nombre;
       _matriculas = const [];
+      _valoracion = null;
+      _especialidad = null;
       _destino = 'VALORACION';
     });
     final ficha = await Dependencias.de(context).coordinacion.estudiante(id);
@@ -97,13 +104,24 @@ class _AgendarState extends State<_Agendar> {
           .cast<Map<String, dynamic>>()
           .where((m) => m['estado'] == 'EN_CURSO' && (m['por_agendar'] as int) > 0)
           .toList();
-      // Si se llegó desde el horario de alguien que no valora, se agenda su
-      // programa: se elige la primera matrícula del área de ese profesional.
+      final abiertas = [for (final v in (ficha['valoraciones'] as List)) ValoracionProceso.fromJson(v as Map<String, dynamic>)]
+          .where((v) => v.enCurso)
+          .toList()
+        ..sort((a, b) => b.tipo.compareTo(a.tipo)); // FINAL antes que INICIAL
+      _valoracion = abiertas.firstOrNull;
+      // Si el terapeuta ya venía elegido (desde su horario), se agenda lo que él
+      // atiende: una especialidad prevista de la valoración o su programa.
       final elegido = widget.ctx.terapeutas.where((t) => t.id == _terapeuta).firstOrNull;
-      if (elegido != null && elegido.extra['valora'] != true) {
-        final areas = (elegido.extra['areas'] as List).cast<String>();
-        final matricula = _matriculas.where((m) => areas.contains(m['area_id'])).firstOrNull;
-        if (matricula != null) _destino = matricula['id'] as String;
+      final suyas = ((elegido?.extra['especialidades'] as List?) ?? const []).cast<String>();
+      final prevista = _valoracion?.especialidades.where((x) => x.porAgendar > 0 && suyas.contains(x.subAreaId)).firstOrNull;
+      final pendientes = _valoracion?.especialidades.where((x) => x.porAgendar > 0).toList() ?? const [];
+      if (prevista != null) {
+        _especialidad = prevista.subAreaId;
+      } else if (elegido == null && pendientes.length == 1) {
+        _especialidad = pendientes.first.subAreaId; // una sola pendiente: ya elegida
+      } else if (_matriculas.isNotEmpty && (_valoracion == null || elegido != null)) {
+        final areas = ((elegido?.extra['areas'] as List?) ?? const []).cast<String>();
+        _destino = (_matriculas.where((m) => areas.contains(m['area_id'])).firstOrNull ?? _matriculas.first)['id'] as String;
       }
     });
   }
@@ -122,6 +140,8 @@ class _AgendarState extends State<_Agendar> {
             inicio: '${Formatos.fechaIso(_dia)}T$_hora',
             tipo: _destino == 'VALORACION' ? 'VALORACION' : 'PROGRAMA',
             matriculaId: _destino == 'VALORACION' ? null : _destino,
+            procesoId: _destino == 'VALORACION' ? _valoracion?.id : null,
+            especialidadId: _destino == 'VALORACION' ? _especialidad : null,
             observacion: _nota.text.trim().isEmpty ? null : _nota.text.trim(),
           ),
       exito: 'Sesión agendada',
@@ -135,9 +155,12 @@ class _AgendarState extends State<_Agendar> {
   Widget build(BuildContext context) {
     final api = Dependencias.de(context).coordinacion;
     final valoracion = _destino == 'VALORACION';
-    // Valoraciones: solo quienes valoran (son de Neuro, pero también se valora,
-    // como excepción, a estudiantes de Estimulación temprana).
-    final terapeutas = valoracion ? widget.ctx.terapeutasQueValoran : widget.ctx.terapeutasDeArea(_areaDestino ?? widget.area);
+    // Valoraciones: quienes son de la especialidad elegida (de cualquier área:
+    // también se valora, como excepción, a estudiantes de Estimulación temprana).
+    final terapeutas = valoracion
+        ? (_especialidad == null ? const <Opcion>[] : widget.ctx.terapeutasDe(_especialidad!))
+        : widget.ctx.terapeutasDeArea(_areaDestino ?? widget.area);
+    final pendientes = _valoracion?.especialidades.where((x) => x.porAgendar > 0).toList() ?? const <EspecialidadPlan>[];
     // Si cambia lo que se agenda, el terapeuta elegido sigue solo si está en la nueva lista.
     final elegido = terapeutas.where((t) => t.id == _terapeuta).firstOrNull;
     final terapeuta = elegido?.id;
@@ -182,7 +205,12 @@ class _AgendarState extends State<_Agendar> {
                 isExpanded: true,
                 value: _destino,
                 items: [
-                  const DropdownMenuItem(value: 'VALORACION', child: Text('Valoración')),
+                  DropdownMenuItem(
+                    value: 'VALORACION',
+                    child: Text(_valoracion == null
+                        ? 'Valoración (sin abrir)'
+                        : '${_valoracion!.titulo} · ${faltan(pendientes.fold(0, (s, x) => s + x.porAgendar))} por agendar'),
+                  ),
                   for (final m in _matriculas)
                     DropdownMenuItem(
                       value: m['id'] as String,
@@ -193,6 +221,27 @@ class _AgendarState extends State<_Agendar> {
                   _destino = v!;
                 }),
               ),
+              if (valoracion && _pacienteId != null) ...[
+                if (_valoracion == null)
+                  const Text('No tiene una valoración abierta: ábrela desde su ficha, en "Recorrido".')
+                else if (pendientes.isEmpty)
+                  const Text('Ya están agendadas todas las sesiones previstas. Para agregar más, ajusta la valoración en su ficha.')
+                else
+                  Wrap(
+                    spacing: 6,
+                    children: [
+                      for (final x in pendientes)
+                        ChoiceChip(
+                          label: Text('${x.especialidad} · ${faltan(x.porAgendar)}'),
+                          selected: _especialidad == x.subAreaId,
+                          onSelected: (_) => setState(() {
+                            _especialidad = x.subAreaId;
+                            _hora = null;
+                          }),
+                        ),
+                    ],
+                  ),
+              ],
               const SizedBox(height: 16),
               const Text('3. Terapeuta'),
               DropdownButton<String>(
@@ -207,7 +256,7 @@ class _AgendarState extends State<_Agendar> {
               ),
               Text(
                 [
-                  if (valoracion) 'Solo aparecen quienes hacen valoraciones.',
+                  if (valoracion) 'Solo aparecen profesionales de la especialidad elegida.',
                   if (elegido != null) 'Turnos de ${elegido.extra['minutos_turno'] ?? 60} minutos.',
                 ].join(' '),
                 style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),

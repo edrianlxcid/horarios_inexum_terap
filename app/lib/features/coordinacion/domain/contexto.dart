@@ -23,6 +23,7 @@ class ContextoCoordinacion {
     required this.terapeutas,
     required this.programas,
     required this.nivelesDemanda,
+    required this.especialidadesValoracion,
     required this.puedeRegistrarProfesionales,
   });
 
@@ -35,11 +36,25 @@ class ContextoCoordinacion {
       terapeutas: opciones('terapeutas'),
       programas: opciones('programas'),
       nivelesDemanda: opciones('niveles_demanda'),
+      especialidadesValoracion: opciones('especialidades_valoracion'),
       puedeRegistrarProfesionales: j['puede_registrar_profesionales'] == true,
     );
   }
 
   final List<Opcion> sedes, areas, especialidades, terapeutas, programas, nivelesDemanda;
+
+  /// Especialidades que hacen valoraciones (extra['tipos']: INICIAL y/o FINAL).
+  final List<Opcion> especialidadesValoracion;
+
+  List<Opcion> especialidadesQueValoran(String tipo) =>
+      especialidadesValoracion.where((e) => (e.extra['tipos'] as List).contains(tipo)).toList();
+
+  /// Terapeutas de una especialidad.
+  List<Opcion> terapeutasDe(String subAreaId) =>
+      terapeutas.where((t) => ((t.extra['especialidades'] as List?) ?? const []).contains(subAreaId)).toList();
+
+  /// Programas de terapia (no valoraciones) para recomendar.
+  List<Opcion> get programasDeTerapia => programas.where((p) => p.extra['valoracion'] == null).toList();
   final bool puedeRegistrarProfesionales;
 
   List<Opcion> terapeutasDeArea(String? areaId) => areaId == null

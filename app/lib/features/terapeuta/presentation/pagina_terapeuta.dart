@@ -99,6 +99,7 @@ class _FilaParticipante extends StatelessWidget {
     final api = Dependencias.de(context).terapeuta;
     final detalle = [
       Formatos.edad(p.edadMeses),
+      if (p.valoracion != null) 'Valoración ${p.valoracion == 'FINAL' ? 'final' : 'inicial'}${p.especialidad != null ? ' · ${p.especialidad}' : ''}',
       if (p.numeroSesion != null) 'sesión ${p.numeroSesion}${p.totalSesiones != null ? ' de ${p.totalSesiones}' : ''}',
       ?p.fase,
       if (p.demanda != null) 'demanda ${p.demanda!.toLowerCase()}',
@@ -125,6 +126,7 @@ class _FilaParticipante extends StatelessWidget {
                 children: [
                   Text(p.paciente, style: const TextStyle(fontWeight: FontWeight.w600, decoration: TextDecoration.underline)),
                   Text(detalle, style: Theme.of(context).textTheme.bodySmall),
+                  if (p.trabajado != null) Text('Trabajado: ${p.trabajado}', style: Theme.of(context).textTheme.bodySmall),
                 ],
               ),
             ),

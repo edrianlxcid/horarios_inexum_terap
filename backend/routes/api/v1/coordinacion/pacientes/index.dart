@@ -3,7 +3,7 @@ import 'package:backend/core/dependencias.dart';
 import 'package:backend/core/http/respuestas.dart';
 import 'package:dart_frog/dart_frog.dart';
 
-/// GET  /api/v1/coordinacion/pacientes?q&area&sede&estado&profesional&programa&pagina
+/// GET  /api/v1/coordinacion/pacientes?q&area&sede&estado&etapa&profesional&programa&pagina
 ///      → {total, pagina, tamano, filas}: cada fila con contrato, programas, avance y representante.
 /// POST /api/v1/coordinacion/pacientes {nombres, apellidos, fecha_nacimiento, sede_id, ..., representante:{...}}
 Future<Response> onRequest(RequestContext context) async {
@@ -22,6 +22,7 @@ Future<Response> onRequest(RequestContext context) async {
             estado: q['estado'],
             profesional: q['profesional'],
             programa: q['programa'],
+            etapa: q['etapa'],
             pagina: int.tryParse(q['pagina'] ?? '') ?? 1,
           ),
         );

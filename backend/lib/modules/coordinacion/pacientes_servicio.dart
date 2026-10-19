@@ -2,6 +2,7 @@ import 'package:backend/core/auth/sesion.dart';
 import 'package:backend/core/db/base_datos.dart';
 import 'package:backend/modules/coordinacion/alcance.dart';
 import 'package:backend/modules/herramienta_datos/modelos.dart';
+import 'package:backend/modules/recorrido/recorrido.dart';
 import 'package:postgres/postgres.dart';
 
 /// Pacientes (estudiantes) para coordinación: listado con contrato y avance,
@@ -26,13 +27,14 @@ class PacientesCoordinacion {
     String? estado,
     String? profesional,
     String? programa,
+    String? etapa,
     int pagina = 1,
   }) {
     final a = Alcance.de(s, area: area);
     final p = {
       ...a.parametros,
       'q': q.trim(), 'qq': '%${q.trim()}%', 'llave': _llave, 'desde': (pagina - 1) * tamanoPagina,
-      'sede': sede ?? '', 'estado': estado ?? '', 'prof': profesional ?? '', 'prog': programa ?? '',
+      'sede': sede ?? '', 'estado': estado ?? '', 'prof': profesional ?? '', 'prog': programa ?? '', 'etapa': etapa ?? '',
     };
     const filtro = '''
       FROM personas.pacientes pa
@@ -40,6 +42,7 @@ class PacientesCoordinacion {
       WHERE pa.archivado_en IS NULL
         AND (@sede:text = '' OR pa.sede_principal_id = CAST(nullif(@sede:text, '') AS uuid))
         AND (@estado:text = '' OR pa.estado = @estado:text)
+        AND (@etapa:text = '' OR agenda.etapa_paciente(pa.id) = @etapa:text)
         AND (@prog:text = '' OR EXISTS (SELECT 1 FROM matriculas.matriculas m WHERE m.paciente_id = pa.id
                                         AND m.programa_id = CAST(nullif(@prog:text, '') AS uuid)))
         AND (@prof:text = '' OR EXISTS (SELECT 1 FROM agenda.participantes x JOIN agenda.sesiones s ON s.id = x.sesion_id
@@ -55,6 +58,7 @@ class PacientesCoordinacion {
       final total = await fila(tx, 'SELECT count(*)::int AS n $filtro AND ${Alcance.paciente('pa')}', p);
       final lista = await filas(tx, '''
         SELECT pa.id::text, pa.codigo_historia, pa.nombres, pa.apellidos, pa.estado, se.nombre AS sede,
+               agenda.etapa_paciente(pa.id) AS etapa,
                (extract(year FROM age(pa.fecha_nacimiento)) * 12 + extract(month FROM age(pa.fecha_nacimiento)))::int AS edad_meses,
                (SELECT nd.nombre FROM personas.clasificaciones_demanda cd JOIN personas.niveles_demanda nd ON nd.id = cd.nivel_id
                 WHERE cd.paciente_id = pa.id AND cd.vigente) AS demanda,
@@ -153,7 +157,10 @@ class PacientesCoordinacion {
           FROM agenda.participantes x JOIN agenda.sesiones s ON s.id = x.sesion_id
           WHERE x.paciente_id = CAST(@id:text AS uuid) AND s.inicio < now()''', p),
         'proximas_sesiones': await _sesiones(tx, p, futuras: true),
-        'ultimas_sesiones': await _sesiones(tx, p, futuras: false),
+        // Recorrido: etapa, valoraciones y línea de tiempo de sus sesiones.
+        'etapa': await Recorrido.etapa(tx, pacienteId),
+        'valoraciones': await Recorrido.valoraciones(tx, pacienteId),
+        'linea_tiempo': [for (final x in await Recorrido.lineaDeTiempo(tx, pacienteId)) if (x['futura'] != true) x],
       };
     });
   }

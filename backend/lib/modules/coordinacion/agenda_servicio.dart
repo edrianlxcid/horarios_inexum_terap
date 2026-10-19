@@ -196,7 +196,7 @@ class AgendaCoordinacion {
     if (tipo != 'VALORACION' && (d['matricula_id'] ?? '').toString().isEmpty) {
       throw ErrorDatos(422, 'Para una sesión de programa elige la matrícula del paciente.');
     }
-    final p = {
+    final p = <String, Object?>{
       ...a.parametros,
       'pac': d['paciente_id'], 'prof': d['profesional_id'], 'ini': d['inicio'].toString().replaceFirst('T', ' '),
       'mat': d['matricula_id'] ?? '', 'tipo': tipo, 'u': s.usuarioId, 'obs': d['observacion'] as String? ?? '',
@@ -204,20 +204,54 @@ class AgendaCoordinacion {
     return _db.conSesion(s, (tx) async {
       final paciente = await fila(tx, 'SELECT 1 FROM personas.pacientes pa WHERE pa.id = CAST(@pac:text AS uuid) AND ${Alcance.paciente('pa')}', p);
       if (paciente == null) throw ErrorDatos(404, 'Ese estudiante no está en tu coordinación.');
+
+      // Una sesión de valoración pertenece a la valoración en curso del
+      // estudiante (la final antes que la inicial) y a una de sus especialidades
+      // previstas: la elegida o la primera que tenga el profesional.
+      if (tipo == 'VALORACION') {
+        final pv = await fila(tx, '''
+          SELECT pv.id::text, pv.tipo FROM agenda.procesos_valoracion pv
+          WHERE pv.paciente_id = CAST(@pac:text AS uuid) AND pv.estado = 'EN_CURSO'
+            AND (@proc:text = '' OR pv.id = CAST(nullif(@proc:text, '') AS uuid))
+          ORDER BY pv.tipo = 'FINAL' DESC LIMIT 1''', {...p, 'proc': d['proceso_id'] ?? ''});
+        if (pv == null) {
+          throw ErrorDatos(422, 'Primero abre la valoración del estudiante (especialidades y sesiones previstas) desde su ficha.');
+        }
+        final esp = await fila(tx, '''
+          SELECT pe.sub_area_id::text FROM agenda.proceso_especialidades pe
+          JOIN personas.profesional_sub_areas psa ON psa.sub_area_id = pe.sub_area_id AND psa.profesional_id = CAST(@prof:text AS uuid)
+          WHERE pe.proceso_id = CAST(@proc:text AS uuid) AND (@esp:text = '' OR pe.sub_area_id = CAST(nullif(@esp:text, '') AS uuid))
+          ORDER BY psa.es_principal DESC LIMIT 1''', {...p, 'proc': pv['id'], 'esp': d['especialidad_id'] ?? ''});
+        if (esp == null) throw ErrorDatos(422, 'Ese profesional no es de ninguna especialidad prevista en la valoración.');
+        p['proc'] = pv['id'];
+        p['esp'] = esp['sub_area_id'];
+        p['vt'] = pv['tipo'];
+      } else {
+        p['proc'] = '';
+        p['esp'] = '';
+      }
       final prog = await fila(tx, tipo == 'VALORACION'
           ? '''SELECT pg.id::text, pg.cupo_maximo, pg.modalidad, pg.duracion_sesion_min, pg.area_id::text
-               FROM catalogo.programas pg JOIN catalogo.tipos_programa t ON t.id = pg.tipo_programa_id
-               WHERE t.es_valoracion AND pg.activo
-                 AND pg.sub_area_requerida_id IN (SELECT sub_area_id FROM personas.profesional_sub_areas
-                                                  WHERE profesional_id = CAST(@prof:text AS uuid))
+               FROM catalogo.programas pg
+               WHERE pg.activo AND pg.valoracion = @vt:text
+                 AND (pg.sub_area_requerida_id = CAST(@esp:text AS uuid)
+                      OR EXISTS (SELECT 1 FROM catalogo.programa_especialidades pe
+                                 WHERE pe.programa_id = pg.id AND pe.sub_area_id = CAST(@esp:text AS uuid)))
                LIMIT 1'''
-          : '''SELECT pg.id::text, pg.cupo_maximo, pg.modalidad, pg.duracion_sesion_min, pg.area_id::text
+          : '''SELECT pg.id::text, pg.cupo_maximo, pg.modalidad, pg.duracion_sesion_min, pg.area_id::text,
+                      pg.requiere_valoracion AND NOT EXISTS (
+                        SELECT 1 FROM agenda.procesos_valoracion pv
+                        WHERE pv.paciente_id = m.paciente_id AND pv.estado = 'COMPLETADA'
+                          AND pv.resultado IN ('INGRESA_A_PROGRAMA', 'CONTINUA')) AS falta_valoracion
                FROM matriculas.matriculas m JOIN catalogo.programas pg ON pg.id = m.programa_id
                WHERE m.id = CAST(@mat:text AS uuid) AND m.paciente_id = CAST(@pac:text AS uuid)''', p);
       if (prog == null) {
         throw ErrorDatos(422, tipo == 'VALORACION'
-            ? 'Ese terapeuta no está habilitado para valoraciones.'
+            ? 'No hay un programa de valoración para esa especialidad.'
             : 'La matrícula no corresponde al paciente.');
+      }
+      if (prog['falta_valoracion'] == true) {
+        throw ErrorDatos(422, 'Este estudiante aún no termina su valoración: el programa empieza cuando se cierra la valoración inicial.');
       }
       final sede = await fila(tx, '''
         SELECT j.sede_id::text FROM agenda.jornadas j
@@ -255,13 +289,16 @@ class AgendaCoordinacion {
                 @cupo:int4, CAST(@u:text AS uuid))
         RETURNING id::text, programa_id::text''', q);
       final participante = await fila(tx, '''
-        INSERT INTO agenda.participantes (sesion_id, paciente_id, matricula_id, observacion, numero_sesion, creado_por)
-        VALUES (CAST(@ses:text AS uuid), CAST(@pac:text AS uuid), CAST(nullif(@mat:text, '') AS uuid), nullif(trim(@obs:text), ''),
+        INSERT INTO agenda.participantes (sesion_id, paciente_id, matricula_id, proceso_valoracion_id, valoracion_especialidad_id,
+                                          observacion, numero_sesion, creado_por)
+        VALUES (CAST(@ses:text AS uuid), CAST(@pac:text AS uuid), CAST(nullif(@mat:text, '') AS uuid),
+                CAST(nullif(@proc:text, '') AS uuid), CAST(nullif(@esp:text, '') AS uuid), nullif(trim(@obs:text), ''),
+                -- Número de sesión dentro de la matrícula o de la valoración.
                 (SELECT count(*) + 1 FROM agenda.participantes x
-                 JOIN agenda.sesiones xs ON xs.id = x.sesion_id
                  WHERE x.paciente_id = CAST(@pac:text AS uuid)
                    AND x.asistencia NOT IN ('CANCELADA', 'REPROGRAMADA', 'FALTA_JUSTIFICADA')
-                   AND (CASE WHEN @mat:text = '' THEN xs.tipo = 'VALORACION' ELSE x.matricula_id = CAST(nullif(@mat:text, '') AS uuid) END)),
+                   AND (CASE WHEN @proc:text <> '' THEN x.proceso_valoracion_id = CAST(nullif(@proc:text, '') AS uuid)
+                             ELSE x.matricula_id = CAST(nullif(@mat:text, '') AS uuid) END)),
                 CAST(@u:text AS uuid))
         RETURNING id::text, numero_sesion''', {...q, 'ses': sesion!['id']});
       return {'sesion_id': sesion['id'], 'participante_id': participante!['id'], 'numero_sesion': participante['numero_sesion']};

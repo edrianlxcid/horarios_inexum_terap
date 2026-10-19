@@ -6,7 +6,7 @@
 class ProgDef {
   const ProgDef(this.codigo, this.nombre, this.area, this.tipo, this.sub, this.total, this.meses, this.porSemana,
       this.modalidad, this.entrega, this.cupo, this.requiereValoracion, this.antesEvaluacion, this.precio, this.fases,
-      {this.duracion = 60});
+      {this.duracion = 60, this.valoracion, this.especialidades = const []});
   final String codigo, nombre, area, tipo, sub, modalidad, entrega;
   final int total, cupo, antesEvaluacion;
   final int? meses, porSemana;
@@ -16,6 +16,12 @@ class ProgDef {
 
   /// Minutos de cada sesión (Neuro y Terapia de lenguaje: 45).
   final int duracion;
+
+  /// INICIAL o FINAL si el programa es una valoración.
+  final String? valoracion;
+
+  /// Especialidades que, además de la requerida, pueden atender el programa.
+  final List<String> especialidades;
 }
 
 class SedeDef {
@@ -48,6 +54,7 @@ class PerfilEmpresa {
     required this.subAreas,
     required this.programas,
     required this.programaValoracion,
+    required this.programaValoracionFinal,
     required this.subValoracion,
     required this.plantillaTerapeutas,
     required this.profesiones,
@@ -77,6 +84,7 @@ class PerfilEmpresa {
   final Map<String, (String area, String nombre)> subAreas;
   final List<ProgDef> programas;
   final String programaValoracion;
+  final String programaValoracionFinal;
   final String subValoracion;
   final List<List<String>> plantillaTerapeutas;
   final Map<String, String> profesiones;
@@ -119,8 +127,13 @@ const perfilMatriz = PerfilEmpresa(
     'ESTIMULACION_TEMPRANA': ('ESTIMULACION_TEMPRANA', 'Estimulación temprana'),
   },
   programas: [
-    ProgDef('VALORACION_INICIAL', 'Valoración inicial', 'NEURO', 'VALORACION', 'VALORACION', 4, null, null,
-        'INDIVIDUAL', 'PRESENCIAL', 1, false, 0, 60, []),
+    // Valoraciones: de 1 a 20 sesiones entre varias especialidades, una persona por turno.
+    ProgDef('VALORACION_INICIAL', 'Valoración inicial', 'NEURO', 'VALORACION', 'VALORACION', 20, null, null,
+        'INDIVIDUAL', 'PRESENCIAL', 1, false, 0, 60, [], duracion: 45, valoracion: 'INICIAL',
+        especialidades: ['PSICOLOGIA', 'TERAPIA_OCUPACIONAL', 'TERAPIA_LENGUAJE']),
+    ProgDef('VALORACION_FINAL', 'Valoración final', 'NEURO', 'VALORACION', 'VALORACION', 20, null, null,
+        'INDIVIDUAL', 'PRESENCIAL', 1, false, 0, 60, [], duracion: 45, valoracion: 'FINAL',
+        especialidades: ['PSICOLOGIA', 'TERAPIA_OCUPACIONAL', 'TERAPIA_LENGUAJE']),
     ProgDef('TERAPIAS_ESPECIFICAS', 'Terapias específicas', 'NEURO', 'SEMANAL', 'TOMATIS', 32, 4, 2,
         'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 1280, [('F1', 12, null), ('F2', 10, null), ('F3 - Integraciones', 10, 'TERAPIA_OCUPACIONAL')], duracion: 45),
     ProgDef('TERAPIA_LENGUAJE', 'Terapia de lenguaje', 'NEURO', 'SEMANAL', 'TERAPIA_LENGUAJE', 24, 4, 2,
@@ -137,6 +150,7 @@ const perfilMatriz = PerfilEmpresa(
         'INDIVIDUAL', 'PRESENCIAL', 1, false, 1, 380, []),
   ],
   programaValoracion: 'VALORACION_INICIAL',
+  programaValoracionFinal: 'VALORACION_FINAL',
   subValoracion: 'VALORACION',
   plantillaTerapeutas: [
     ['VALORACION', 'PSICOLOGIA'], ['VALORACION', 'TERAPIA_LENGUAJE'], ['TOMATIS'], ['TOMATIS', 'TERAPIA_OCUPACIONAL'],
@@ -201,14 +215,17 @@ const perfilSucursal = PerfilEmpresa(
     'LECTOESCRITURA': ('PSICOPEDAGOGIA', 'Lectoescritura'),
   },
   programas: [
-    ProgDef('EVALUACION_PSICOPEDAGOGICA', 'Evaluación psicopedagógica', 'PSICOPEDAGOGIA', 'VALORACION', 'EVALUACION_PSP', 2, null, null,
-        'INDIVIDUAL', 'PRESENCIAL', 1, false, 0, 50, []),
+    ProgDef('EVALUACION_PSICOPEDAGOGICA', 'Evaluación psicopedagógica', 'PSICOPEDAGOGIA', 'VALORACION', 'EVALUACION_PSP', 20, null, null,
+        'INDIVIDUAL', 'PRESENCIAL', 1, false, 0, 50, [], valoracion: 'INICIAL', especialidades: ['APRENDIZAJE']),
+    ProgDef('EVALUACION_FINAL', 'Evaluación final', 'PSICOPEDAGOGIA', 'VALORACION', 'EVALUACION_PSP', 20, null, null,
+        'INDIVIDUAL', 'PRESENCIAL', 1, false, 0, 50, [], valoracion: 'FINAL', especialidades: ['APRENDIZAJE']),
     ProgDef('APOYO_APRENDIZAJE', 'Apoyo al aprendizaje', 'PSICOPEDAGOGIA', 'SEMANAL', 'APRENDIZAJE', 20, 3, 2,
         'INDIVIDUAL', 'PRESENCIAL', 1, true, 1, 500, []),
     ProgDef('TALLER_LECTOESCRITURA', 'Taller de lectoescritura', 'PSICOPEDAGOGIA', 'SEMANAL', 'LECTOESCRITURA', 16, 2, 2,
         'GRUPAL', 'PRESENCIAL', 6, true, 1, 320, []),
   ],
   programaValoracion: 'EVALUACION_PSICOPEDAGOGICA',
+  programaValoracionFinal: 'EVALUACION_FINAL',
   subValoracion: 'EVALUACION_PSP',
   plantillaTerapeutas: [
     ['EVALUACION_PSP', 'APRENDIZAJE'], ['APRENDIZAJE'], ['APRENDIZAJE'],

@@ -5,10 +5,14 @@ import '../../../../core/util/formatos.dart';
 import '../../../../core/widgets/comunes.dart';
 import '../../domain/modelos.dart';
 import '../agenda/agendar_dialogo.dart';
+import '../../../recorrido/domain/recorrido.dart';
+import '../../../recorrido/presentation/linea_de_tiempo.dart';
 import '../coordinacion_comun.dart';
+import 'recorrido_estudiante.dart';
 
-/// Ficha completa del estudiante: datos, representantes, contratos con sus
-/// programas y avance, asistencia, demanda y sesiones.
+/// Ficha completa del estudiante: su recorrido (valoración inicial → programa
+/// → valoración final), datos, representantes, contratos, asistencia, demanda
+/// y la línea de tiempo de sus sesiones.
 class FichaEstudiante extends StatelessWidget {
   const FichaEstudiante({super.key, required this.id});
 
@@ -44,6 +48,7 @@ class FichaEstudiante extends StatelessWidget {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                 children: [
+                  RecorridoEstudiante(e: e, ctx: amb.ctx, area: amb.area, alCambiar: recargar),
                   DosColumnas(
                     izquierda: [
                       _Datos(e: e),
@@ -54,7 +59,13 @@ class FichaEstudiante extends StatelessWidget {
                     derecha: [
                       _Contratos(contratos: listaJson(e['contratos']), matriculas: listaJson(e['matriculas'])),
                       _Sesiones(titulo: 'Próximas sesiones', sesiones: listaJson(e['proximas_sesiones']), vacio: 'Sin sesiones agendadas.'),
-                      _Sesiones(titulo: 'Últimas sesiones', sesiones: listaJson(e['ultimas_sesiones']), vacio: 'Todavía no tiene sesiones.'),
+                      Seccion(
+                        titulo: 'Línea de tiempo',
+                        child: LineaDeTiempo(
+                          sesiones: [for (final x in listaJson(e['linea_tiempo'])) SesionLinea.fromJson(x)],
+                          alTocar: (s) => abrirProfesional(context, s.profesionalId),
+                        ),
+                      ),
                     ],
                   ),
                 ],

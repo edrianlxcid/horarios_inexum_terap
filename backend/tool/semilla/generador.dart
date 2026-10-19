@@ -148,6 +148,7 @@ class GeneradorSemilla {
   final _contratos = <_Contrato>[];
   final _cohortes = <_Cohorte>[];
   final _sesiones = <_Sesion>[];
+  final _procesos = <_Proceso>[];
   final _feriados = <String>{};
   final _ocupProf = <String, Set<int>>{};
   final _ocupPac = <String, Set<int>>{};
@@ -176,7 +177,9 @@ class GeneradorSemilla {
     _agendarGrupos();
     _agendarIndividuales();
     _agendarValoraciones();
+    _agendarValoracionesFinales();
     _registrarAsistencia();
+    _cerrarProcesos();
     _armarContratos();
 
     await _insertarPersonas(db);
@@ -316,7 +319,7 @@ class GeneradorSemilla {
         'sesiones_por_semana': d.porSemana, 'modalidad': d.modalidad, 'modalidad_entrega': d.entrega,
         'cupo_maximo': d.cupo, 'requiere_valoracion': d.requiereValoracion,
         'sesiones_antes_evaluacion': d.antesEvaluacion, 'precio_referencial': d.precio,
-        'reglas_extra': {'ejemplo': true},
+        'reglas_extra': {'ejemplo': true}, 'valoracion': d.valoracion,
       });
       var orden = 1;
       for (final (nombre, sesiones, sub) in d.fases) {
@@ -333,11 +336,15 @@ class GeneradorSemilla {
       'codigo': 'text', 'nombre': 'text', 'total_sesiones': 'smallint', 'duracion_meses': 'smallint',
       'duracion_sesion_min': 'smallint', 'sesiones_por_semana': 'smallint', 'modalidad': 'text',
       'modalidad_entrega': 'text', 'cupo_maximo': 'smallint', 'requiere_valoracion': 'boolean',
-      'sesiones_antes_evaluacion': 'smallint', 'precio_referencial': 'numeric', 'reglas_extra': 'jsonb',
+      'sesiones_antes_evaluacion': 'smallint', 'precio_referencial': 'numeric', 'reglas_extra': 'jsonb', 'valoracion': 'text',
     });
     await db.insertar('catalogo.programa_fases', filasFases, {
       'id': 'uuid', 'programa_id': 'uuid', 'orden': 'smallint', 'nombre': 'text', 'sesiones': 'smallint', 'sub_area_id': 'uuid',
     });
+    await db.insertar('catalogo.programa_especialidades', [
+      for (final d in defs)
+        for (final e in d.especialidades) {'programa_id': _programas[d.codigo]!.id, 'sub_area_id': _subAreas[e]},
+    ], {'programa_id': 'uuid', 'sub_area_id': 'uuid'});
 
     await db.insertar('clinico.plantillas_nota', [
       {'nombre': 'Nota general de sesión', 'campos': ['Objetivo trabajado', 'Actividades', 'Respuesta del paciente', 'Recomendaciones']},
@@ -638,32 +645,107 @@ class GeneradorSemilla {
     }
   }
 
+  /// Valoración inicial: todo paciente pasa por ella antes de su programa
+  /// (salvo programas que no la piden). Los prospectos están valorándose o
+  /// ya valorados y por ingresar.
   void _agendarValoraciones() {
-    final valoracion = _programas[perfil.programaValoracion]!;
+    final prog = _programas[perfil.programaValoracion]!;
     for (final p in _pacientes) {
       final primera = p.matriculas.isEmpty ? null : (p.matriculas.toList()..sort((a, b) => a.inicio.compareTo(b.inicio))).first;
       if (!p.prospecto && (primera == null || !primera.prog.def.requiereValoracion)) continue;
-      final cantidad = p.prospecto ? _entre(1, 2) : _entre(1, 3);
-      final (desde, hasta) = p.prospecto
-          ? (hoy.subtract(const Duration(days: 30)), hoy.add(const Duration(days: 14)))
-          : (primera!.inicio.subtract(const Duration(days: 21)), primera.inicio.subtract(const Duration(days: 2)));
-      final evaluadores = _profs.where((x) => x.sede == p.sede && x.subAreas.contains(perfil.subValoracion)).toList();
-      var hechas = 0;
-      for (var intento = 0; intento < 60 && hechas < cantidad; intento++) {
+      // Con matrícula: la valoración terminó antes de firmar el contrato (y antes de hoy).
+      final fin = p.prospecto ? hoy.add(const Duration(days: 14)) : _menor(primera!.inicio.subtract(const Duration(days: 2)), hoy.subtract(const Duration(days: 1)));
+      final (desde, hasta) = p.prospecto ? (hoy.subtract(const Duration(days: 30)), fin) : (fin.subtract(const Duration(days: 26)), fin);
+      final proceso = _Proceso(_id(), p, 'INICIAL', desde.subtract(const Duration(days: 1)));
+      _valorar(proceso, prog, desde, hasta);
+      if (proceso.sesiones.isNotEmpty) _procesos.add(proceso);
+    }
+  }
+
+  /// Valoración final de quienes terminaron todas las sesiones de su programa
+  /// (tres de cada cuatro); el resto queda esperando su valoración final.
+  void _agendarValoracionesFinales() {
+    final prog = _programas[perfil.programaValoracionFinal]!;
+    for (final p in _pacientes.where((p) => p.matriculas.isNotEmpty)) {
+      final terminadas = p.matriculas.every((m) =>
+          m.retiroDesde == null && m.sesiones.length >= m.prog.def.total && m.sesiones.every((s) => s.sesion.inicio.isBefore(hoy)));
+      if (!terminadas || _r.nextDouble() > 0.75) continue;
+      final ultima = p.matriculas.expand((m) => m.sesiones).map((s) => s.sesion.inicio).reduce((a, b) => a.isAfter(b) ? a : b);
+      final desde = _diaHabil(_soloFecha(ultima).add(Duration(days: _entre(2, 6))));
+      final proceso = _Proceso(_id(), p, 'FINAL', _soloFecha(ultima).add(const Duration(days: 1)))
+        ..mat = (p.matriculas.toList()..sort((a, b) => a.inicio.compareTo(b.inicio))).last;
+      _valorar(proceso, prog, desde, desde.add(const Duration(days: 14)));
+      if (proceso.sesiones.isNotEmpty) _procesos.add(proceso);
+    }
+  }
+
+  /// Prevé de 1 a 3 especialidades con 1 o 2 sesiones cada una y las agenda
+  /// entre [desde] y [hasta] con profesionales de esa especialidad.
+  void _valorar(_Proceso proceso, _Prog prog, DateTime desde, DateTime hasta) {
+    final p = proceso.paciente;
+    final otras = prog.def.especialidades.toList()..shuffle(_r);
+    final elegidas = {if (_r.nextDouble() < 0.7) prog.def.sub, ...otras.take(_entre(1, 2))};
+    final dur = prog.def.duracion;
+    for (final sub in elegidas) {
+      final candidatos = _profs.where((x) => x.sede == p.sede && x.subAreas.contains(sub)).toList();
+      if (candidatos.isEmpty) continue;
+      final previstas = _entre(1, 2);
+      var agendadas = 0;
+      for (var intento = 0; intento < 60 && agendadas < previstas; intento++) {
         final dia = desde.add(Duration(days: _r.nextInt(max(1, hasta.difference(desde).inDays))));
-        final prof = evaluadores[_r.nextInt(evaluadores.length)];
+        final prof = candidatos[_r.nextInt(candidatos.length)];
         final horas = prof.horas[dia.weekday];
         if (horas == null || horas.isEmpty) continue;
         final t = _en(dia, horas[_r.nextInt(horas.length)]);
-        final dur = valoracion.def.duracion;
         if (!_profLibre(prof, t, dur) || !_pacLibre(p, t, dur)) continue;
-        final sesion = _Sesion(_id(), p.sede, prof, valoracion, 'VALORACION', t, 1)..salaId = p.sede.salas['Consultorio 1'];
+        final sesion = _Sesion(_id(), p.sede, prof, prog, 'VALORACION', t, 1)..salaId = p.sede.salas['Consultorio 1'];
         _ocupar(prof, t, dur);
         _ocuparPac(p, t, dur);
-        sesion.participantes.add(_Part(_id(), sesion, p, null, ++hechas));
+        final part = _Part(_id(), sesion, p, null, 0)
+          ..proceso = proceso
+          ..especialidad = sub;
+        sesion.participantes.add(part);
+        proceso.sesiones.add(part);
         _sesiones.add(sesion);
+        agendadas++;
+      }
+      if (agendadas > 0) proceso.previstas[sub] = previstas;
+    }
+  }
+
+  /// Ordena las sesiones de cada valoración y cierra las que ya terminaron:
+  /// la inicial, con el programa al que ingresa; la final, con el alta o la
+  /// continuación. Algunos prospectos siguen en valoración.
+  void _cerrarProcesos() {
+    for (final pr in _procesos) {
+      pr.sesiones.sort((a, b) => a.sesion.inicio.compareTo(b.sesion.inicio));
+      for (final (i, s) in pr.sesiones.indexed) {
+        s.numero = i + 1;
+      }
+      final terminadas = pr.sesiones.every((s) => s.sesion.inicio.isBefore(hoy));
+      final cerrar = terminadas && (pr.tipo == 'FINAL' || pr.paciente.matriculas.isNotEmpty || _r.nextDouble() < 0.45);
+      if (!cerrar) continue;
+      // Cerrada: lo previsto es exactamente lo que se hizo.
+      pr.previstas
+        ..clear()
+        ..addAll({for (final s in pr.sesiones) s.especialidad!: pr.sesiones.where((x) => x.especialidad == s.especialidad).length});
+      pr.cerradoEn = _soloFecha(pr.sesiones.last.sesion.inicio).add(const Duration(days: 1, hours: 12));
+      if (pr.tipo == 'INICIAL') {
+        pr.resultado = 'INGRESA_A_PROGRAMA';
+        pr.recomendado = pr.paciente.matriculas.isNotEmpty
+            ? (pr.paciente.matriculas.toList()..sort((a, b) => a.inicio.compareTo(b.inicio))).first.prog
+            : _elegir(_programas.values.where((x) => x.def.valoracion == null).toList());
+        pr.conclusion = 'Se recomienda ingresar a ${pr.recomendado!.def.nombre}.';
+      } else {
+        final alta = _r.nextDouble() < 0.65;
+        pr.resultado = alta ? 'ALTA' : 'CONTINUA';
+        pr.conclusion = alta
+            ? 'Cumplió los objetivos del programa: se le da el alta.'
+            : 'Avanzó en sus objetivos; se recomienda continuar con un nuevo programa.';
       }
     }
+    resumen['valoraciones iniciales'] = _procesos.where((p) => p.tipo == 'INICIAL').length;
+    resumen['valoraciones finales'] = _procesos.where((p) => p.tipo == 'FINAL').length;
   }
 
   void _registrarAsistencia() {
@@ -886,6 +968,19 @@ class GeneradorSemilla {
       'sesiones_a_generar': 'smallint', 'estado': 'text',
     });
 
+    // Valoraciones: se cargan abiertas y se cierran después de cargar sus sesiones.
+    await db.insertar('agenda.procesos_valoracion', [
+      for (final pr in _procesos)
+        {
+          'id': pr.id, 'paciente_id': pr.paciente.id, 'tipo': pr.tipo, 'matricula_id': pr.mat?.id,
+          'abierto_en': _ts(pr.abierto), 'abierto_por': _coordinadores.first,
+        },
+    ], {'id': 'uuid', 'paciente_id': 'uuid', 'tipo': 'text', 'matricula_id': 'uuid', 'abierto_en': 'timestamptz', 'abierto_por': 'uuid'});
+    await db.insertar('agenda.proceso_especialidades', [
+      for (final pr in _procesos)
+        for (final MapEntry(key: sub, value: n) in pr.previstas.entries) {'proceso_id': pr.id, 'sub_area_id': _subAreas[sub], 'sesiones': n},
+    ], {'proceso_id': 'uuid', 'sub_area_id': 'uuid', 'sesiones': 'smallint'});
+
     _sesiones.sort((a, b) => a.inicio.compareTo(b.inicio));
     await db.insertar('agenda.sesiones', [
       for (final s in _sesiones)
@@ -913,12 +1008,15 @@ class GeneradorSemilla {
           'marcado_en': marcada ? _ts(s.inicio.add(const Duration(minutes: 65))) : null,
           // Notas de coordinación en algunas citas próximas, como en los horarios actuales.
           'observacion': p.asistencia == 'PENDIENTE' && _r.nextDouble() < 0.07 ? _elegir(observacionesCita) : null,
+          'proceso_valoracion_id': p.proceso?.id,
+          'valoracion_especialidad_id': p.especialidad == null ? null : _subAreas[p.especialidad],
         });
       }
     }
     await db.insertar('agenda.participantes', participantes, {
       'id': 'uuid', 'sesion_id': 'uuid', 'paciente_id': 'uuid', 'matricula_id': 'uuid', 'numero_sesion': 'smallint',
       'fase_id': 'uuid', 'asistencia': 'text', 'marcado_por': 'uuid', 'marcado_en': 'timestamptz', 'observacion': 'text',
+      'proceso_valoracion_id': 'uuid', 'valoracion_especialidad_id': 'uuid',
     });
     resumen['participaciones en sesiones'] = participantes.length;
   }
@@ -981,6 +1079,20 @@ class GeneradorSemilla {
     }
     await db.actualizar('matriculas.contratos', estadosContrato, {'estado': 'text'});
 
+    await db.actualizar('agenda.procesos_valoracion', [
+      for (final pr in _procesos.where((p) => p.cerradoEn != null))
+        {
+          'id': pr.id, 'estado': 'COMPLETADA', 'resultado': pr.resultado, 'conclusion': pr.conclusion,
+          'programa_recomendado_id': pr.recomendado?.id, 'cerrado_en': _ts(pr.cerradoEn!), 'cerrado_por': _coordinadores.first,
+        },
+    ], {
+      'estado': 'text', 'resultado': 'text', 'conclusion': 'text', 'programa_recomendado_id': 'uuid',
+      'cerrado_en': 'timestamptz', 'cerrado_por': 'uuid',
+    });
+
+    // Graduado solo con el alta de la valoración final; quien terminó su
+    // programa y aún no tiene el alta sigue activo.
+    final altas = {for (final pr in _procesos) if (pr.tipo == 'FINAL' && pr.resultado == 'ALTA') pr.paciente.id};
     final estadosPac = <Map<String, Object?>>[];
     for (final p in _pacientes.where((p) => !p.prospecto)) {
       final estados = p.matriculas.map((m) => m.estado).toSet();
@@ -990,7 +1102,7 @@ class GeneradorSemilla {
               ? 'CONGELADO'
               : estados.every((e) => e == 'CANCELADA')
                   ? 'RETIRADO'
-                  : 'GRADUADO';
+                  : altas.contains(p.id) ? 'GRADUADO' : 'ACTIVO';
       p.estado = estado;
       estadosPac.add({'id': p.id, 'estado': estado});
     }
@@ -1006,13 +1118,19 @@ class GeneradorSemilla {
     for (final s in _sesiones.where((s) => s.tipo == 'VALORACION')) {
       final part = s.participantes.first;
       if (part.asistencia != 'ASISTIO') continue;
-      final recomendado = part.paciente.matriculas.isNotEmpty
-          ? part.paciente.matriculas.first.prog.id
-          : _elegir(_programas.values.where((p) => p.def.codigo != perfil.programaValoracion).toList()).id;
+      final inicial = part.proceso?.tipo != 'FINAL';
+      final recomendado = !inicial
+          ? null
+          : part.proceso?.recomendado?.id ??
+              (part.paciente.matriculas.isNotEmpty
+                  ? part.paciente.matriculas.first.prog.id
+                  : _elegir(_programas.values.where((p) => p.def.valoracion == null).toList()).id);
       valoraciones.add({
         'participante_id': part.id, 'profesional_id': s.prof.id, 'instrumento': _elegir(instrumentos),
         'resultados': 'Puntajes por área: atención ${_entre(40, 95)}, lenguaje ${_entre(40, 95)}, motricidad ${_entre(40, 95)}.',
-        'conclusion': 'Se recomienda iniciar el programa sugerido y revaluar al finalizar.',
+        'conclusion': inicial
+            ? 'Se recomienda iniciar el programa sugerido y revaluar al finalizar.'
+            : 'Se comparan los resultados con la valoración inicial y se revisan los objetivos del programa.',
         'programa_recomendado_id': recomendado, 'creado_en': _ts(s.inicio.add(const Duration(hours: 2))),
       });
     }
@@ -1337,6 +1455,8 @@ class GeneradorSemilla {
     return candidatos.first;
   }
 
+  static DateTime _menor(DateTime a, DateTime b) => a.isBefore(b) ? a : b;
+
   /// [d] a las [minuto] (minutos desde medianoche).
   static DateTime _en(DateTime d, int minuto) => DateTime.utc(d.year, d.month, d.day, minuto ~/ 60, minuto % 60);
 
@@ -1605,7 +1725,27 @@ class _Part {
   final _Sesion sesion;
   final _Paciente paciente;
   final _Mat? mat;
-  final int numero;
+  int numero;
   String? faseId;
   String asistencia = 'PENDIENTE';
+
+  /// Sesión de valoración: su proceso y la especialidad que valora.
+  _Proceso? proceso;
+  String? especialidad;
+}
+
+/// Valoración inicial o final de un paciente.
+class _Proceso {
+  _Proceso(this.id, this.paciente, this.tipo, this.abierto);
+  final String id, tipo;
+  final _Paciente paciente;
+  final DateTime abierto;
+  _Mat? mat;
+
+  /// Sesiones previstas por especialidad.
+  final previstas = <String, int>{};
+  final sesiones = <_Part>[];
+  DateTime? cerradoEn;
+  String? resultado, conclusion;
+  _Prog? recomendado;
 }
