@@ -148,7 +148,7 @@ prueba de cada empresa y rol (solo existe con `APP_ENV=development` y desde la m
 | `reiniciar` | Borra la base y la vuelve a crear con datos ficticios (solo desarrollo) |
 
 Diagrama y documento de llaves (generados desde la base de desarrollo):
-[`docs/base-de-datos/diagrama.png`](docs/base-de-datos/diagrama.png) (también en SVG) y
+[`docs/base-de-datos/diagrama.pdf`](docs/base-de-datos/diagrama.pdf) (vectorial, no se pixela; también en PNG y SVG) y
 [`docs/base-de-datos/estructura-base-de-datos.pdf`](docs/base-de-datos/estructura-base-de-datos.pdf)
 con llaves primarias, foráneas, valores únicos, validaciones y el detalle de cada tabla.
 
